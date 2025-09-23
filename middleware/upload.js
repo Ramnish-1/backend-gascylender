@@ -6,10 +6,10 @@ const cloudinary = require('../config/cloudinary');
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'lpg-products', // Folder name in cloudinary
+    folder: 'lpg-profiles', // Folder name in cloudinary
     allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
     transformation: [
-      { width: 800, height: 600, crop: 'limit' }, // Resize images
+      { width: 800, height: 800, crop: 'limit' }, // Resize images
       { quality: 'auto' } // Auto optimize quality
     ]
   }

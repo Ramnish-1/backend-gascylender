@@ -45,6 +45,9 @@ const createDeliveryAgent = Joi.object({
   }),
   profileImage: Joi.string().min(1).optional().messages({
     'string.min': 'Profile image must be a valid path'
+  }),
+  agencyId: Joi.string().uuid().optional().messages({
+    'string.guid': 'Agency ID must be a valid UUID'
   })
 });
 
@@ -85,6 +88,9 @@ const updateDeliveryAgent = Joi.object({
   }),
   profileImage: Joi.string().min(1).optional().messages({
     'string.min': 'Profile image must be a valid path'
+  }),
+  agencyId: Joi.string().uuid().optional().messages({
+    'string.guid': 'Agency ID must be a valid UUID'
   })
 }).unknown(true); // Allow unknown fields like createdAt, updatedAt, id
 

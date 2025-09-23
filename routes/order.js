@@ -14,6 +14,10 @@ router.get('/status/:status', orderController.getOrdersByStatus);
 // Customer-specific routes
 router.get('/customer/summary', orderController.getCustomerOrdersSummary);
 
+// Agent-specific routes
+router.get('/agent/history', orderController.getAgentDeliveryHistory);
+router.get('/agent/stats', orderController.getAgentDeliveryStats);
+
 // Product routes - REMOVED (these belong in product routes, not order routes)
 
 // Order management routes

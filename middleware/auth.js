@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const { User, AgencyOwner } = require('../models');
 const { createError } = require('../utils/errorHandler');
 
 // Authenticate user middleware
@@ -16,19 +16,40 @@ const authenticate = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Check if user exists
-    const user = await User.findByPk(decoded.userId);
-    if (!user) {
-      return next(createError(401, 'User not found'));
+    // Check if user exists in User table first
+    let user = await User.findByPk(decoded.userId);
+    let userType = 'user';
+    let userData = null;
+
+    if (user) {
+      userType = user.role;
+      userData = {
+        id: user.id,
+        userId: user.id,
+        email: user.email,
+        role: user.role,
+        deliveryAgentId: user.deliveryAgentId
+      };
+    } else {
+      // If not found in User table, check AgencyOwner table
+      const agencyOwner = await AgencyOwner.findByPk(decoded.userId);
+      if (agencyOwner) {
+        userType = 'agency_owner';
+        userData = {
+          id: agencyOwner.id,
+          userId: agencyOwner.id,
+          email: agencyOwner.email,
+          role: 'agency_owner',
+          agencyId: agencyOwner.agencyId,
+          deliveryAgentId: null
+        };
+      } else {
+        return next(createError(401, 'User not found'));
+      }
     }
 
     // Add user info to request
-    req.user = {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      deliveryAgentId: user.deliveryAgentId
-    };
+    req.user = userData;
 
     next();
   } catch (error) {
@@ -57,6 +78,7 @@ const optionalAuth = async (req, res, next) => {
     const user = await User.findByPk(decoded.userId);
     if (user) {
       req.user = {
+        id: user.id,
         userId: user.id,
         email: user.email,
         role: user.role,
@@ -71,7 +93,23 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
+// Authorize user middleware (check role)
+const authorize = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return next(createError(401, 'Authentication required'));
+    }
+
+    if (!roles.includes(req.user.role)) {
+      return next(createError(403, 'Access denied. Insufficient permissions'));
+    }
+
+    next();
+  };
+};
+
 module.exports = {
   authenticate,
-  optionalAuth
+  optionalAuth,
+  authorize
 };

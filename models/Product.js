@@ -67,8 +67,22 @@ const Product = sequelize.define('Product', {
     defaultValue: []
   },
   images: {
-    // Array of image path strings
-    type: DataTypes.ARRAY(DataTypes.STRING),
+    // Array of image path strings (Cloudinary URLs). Use TEXT[] to avoid 255-char limit
+    type: DataTypes.ARRAY(DataTypes.TEXT),
+    allowNull: true,
+    defaultValue: []
+  },
+  agencyId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: 'agencies',
+      key: 'id'
+    }
+  },
+  agencies: {
+    // Array of agency information: [{ name, email, phone, address, city, pincode }]
+    type: DataTypes.JSONB,
     allowNull: true,
     defaultValue: []
   }

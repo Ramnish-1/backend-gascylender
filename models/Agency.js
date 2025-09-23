@@ -1,7 +1,7 @@
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('../config/database');
 
-const DeliveryAgent = sequelize.define('DeliveryAgent', {
+const Agency = sequelize.define('Agency', {
   id: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
@@ -11,7 +11,7 @@ const DeliveryAgent = sequelize.define('DeliveryAgent', {
     type: DataTypes.STRING,
     allowNull: false,
     validate: {
-      len: [2, 100]
+      len: [2, 150]
     }
   },
   email: {
@@ -25,75 +25,84 @@ const DeliveryAgent = sequelize.define('DeliveryAgent', {
   phone: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
     validate: {
       len: [10, 15]
     }
   },
-  vehicleNumber: {
+  addressTitle: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
     validate: {
-      len: [5, 20]
+      len: [2, 50]
     }
   },
-  panCardNumber: {
+  address: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
     validate: {
-      len: [10, 10],
-      is: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/
+      len: [5, 500]
     }
   },
-  aadharCardNumber: {
+  city: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
     validate: {
-      len: [12, 12],
-      is: /^[0-9]{12}$/
+      len: [2, 50]
     }
   },
-  drivingLicence: {
+  pincode: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
     validate: {
-      len: [10, 20]
+      len: [6, 6]
     }
   },
-  bankDetails: {
-    type: DataTypes.TEXT,
-    allowNull: false
-  },
-  status: {
-    type: DataTypes.ENUM('online', 'offline'),
-    defaultValue: 'offline'
-  },
-  joinedAt: {
-    type: DataTypes.DATE,
-    allowNull: true,
-    validate: {
-      isDate: true
-    }
-  },
-  profileImage: {
+  landmark: {
     type: DataTypes.STRING,
     allowNull: true
   },
-  agencyId: {
+  status: {
+    type: DataTypes.ENUM('inactive', 'active'),
+    defaultValue: 'inactive'
+  },
+  confirmationToken: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  confirmationExpiresAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  ownerId: {
     type: DataTypes.UUID,
-    allowNull: false,
+    allowNull: true,
     references: {
-      model: 'agencies',
+      model: 'agency_owners',
       key: 'id'
     }
+  },
+  isOwnerConfirmed: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  autoAcceptOrders: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  pickupEnabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  pickupSlots: {
+    type: DataTypes.JSONB,
+    allowNull: true,
+    defaultValue: []
   }
 }, {
-  tableName: 'delivery_agents',
+  tableName: 'agencies',
   timestamps: true
 });
 
-module.exports = DeliveryAgent;
+module.exports = Agency;
+
+

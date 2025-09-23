@@ -8,6 +8,7 @@ const variantSchema = Joi.object({
   stock: Joi.number().integer().min(0).default(0)
 });
 
+
 // Validation for creating a product
 const createProduct = Joi.object({
   productName: Joi.string().min(2).max(200).required().messages({
@@ -48,7 +49,10 @@ const createProduct = Joi.object({
     'array.base': 'Variants must be an array',
     'array.min': 'At least one variant is required'
   }),
-  images: Joi.array().items(Joi.string().min(1)).optional()
+  images: Joi.array().items(Joi.string().min(1)).optional(),
+  agencyId: Joi.string().uuid().optional().messages({
+    'string.guid': 'Agency ID must be a valid UUID'
+  })
 });
 
 // Validation for updating a product
@@ -86,7 +90,10 @@ const updateProduct = Joi.object({
     'any.only': 'Status must be either active or inactive'
   }),
   variants: Joi.array().items(variantSchema).min(1).optional(),
-  images: Joi.array().items(Joi.string().min(1)).optional()
+  images: Joi.array().items(Joi.string().min(1)).optional(),
+  agencyId: Joi.string().uuid().optional().messages({
+    'string.guid': 'Agency ID must be a valid UUID'
+  })
 }).unknown(true);
 
 // Validation for updating status only

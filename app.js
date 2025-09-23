@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
+const fixAgencyPassword = require('./middleware/agencyPasswordFix');
 require('dotenv').config();
 
 const app = express();
@@ -14,9 +15,43 @@ app.use(helmet());
 app.use(cors({
   origin: '*', // Allow all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  credentials: false // Set to false when origin is '*'
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With', 
+    'ngrok-skip-browser-warning',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers',
+    'Access-Control-Allow-Origin',
+    'Access-Control-Allow-Methods',
+    'Access-Control-Allow-Headers'
+  ],
+  credentials: false,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
+
+// Static file serving removed - using Cloudinary for image storage
+
+// Additional CORS middleware for preflight requests
+app.use((req, res, next) => {
+  // Set CORS headers
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, ngrok-skip-browser-warning, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers');
+  res.header('Access-Control-Allow-Credentials', 'false');
+  res.header('Access-Control-Max-Age', '86400'); // 24 hours
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  
+  next();
+});
 
 // Compression middleware
 app.use(compression());
@@ -31,6 +66,9 @@ if (process.env.NODE_ENV === 'development') {
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Agency password fix middleware (must be before routes)
+app.use(fixAgencyPassword);
 
 // Static files
 app.use('/uploads', express.static('uploads'));
@@ -72,6 +110,15 @@ try {
 
 app.use('/api/orders', require('./routes/order'));
 app.use('/api/addresses', require('./routes/address'));
+app.use('/api/agencies', require('./routes/agency'));
+app.use('/api/dashboard', require('./routes/dashboard'));
+
+// Admin routes for Terms & Conditions and Privacy Policy
+app.use('/api/admin/terms-and-conditions', require('./routes/termsAndConditions'));
+app.use('/api/admin/privacy-policies', require('./routes/privacyPolicy'));
+
+// Public routes for Terms & Conditions and Privacy Policy
+app.use('/api/public', require('./routes/public'));
 
 // 404 handler
 app.use(require('./middleware/notFound'));

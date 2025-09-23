@@ -74,6 +74,11 @@ const User = sequelize.define('User', {
   registeredAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  // Admin can block a user from logging in
+  isBlocked: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 }, {
   tableName: 'users',

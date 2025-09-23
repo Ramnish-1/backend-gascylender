@@ -13,6 +13,16 @@ const createAgent = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
+    // Set agencyId from token if user is agency owner
+    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
+      value.agencyId = req.user.agencyId;
+    } else if (req.user && req.user.role === 'admin' && value.agencyId) {
+      // Admin can specify agencyId
+      value.agencyId = value.agencyId;
+    } else if (!req.user || req.user.role !== 'admin') {
+      return next(createError(403, 'Only agency owners and admins can create delivery agents'));
+    }
+
     // Check if email already exists
     const existingEmail = await DeliveryAgent.findOne({ where: { email: value.email } });
     if (existingEmail) {
@@ -62,7 +72,7 @@ const createAgent = async (req, res, next) => {
     // Create delivery agent
     const agent = await DeliveryAgent.create(value);
 
-    logger.info(`Delivery agent created: ${agent.email}`);
+    logger.info(`Delivery agent created: ${agent.email} for agency: ${value.agencyId}`);
 
     res.status(201).json({
       success: true,
@@ -85,7 +95,14 @@ const getAllAgents = async (req, res, next) => {
 
     // If ID is provided, get specific agent
     if (id) {
-      const agent = await DeliveryAgent.findByPk(id);
+      const whereClause = { id };
+      
+      // Filter by agency if user is agency owner
+      if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
+        whereClause.agencyId = req.user.agencyId;
+      }
+      
+      const agent = await DeliveryAgent.findOne({ where: whereClause });
       if (!agent) {
         return next(createError(404, 'Delivery agent not found'));
       }
@@ -99,6 +116,12 @@ const getAllAgents = async (req, res, next) => {
 
     // Build where clause
     const whereClause = {};
+    
+    // Filter by agency if user is agency owner
+    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
+      whereClause.agencyId = req.user.agencyId;
+    }
+    
     if (status) {
       whereClause.status = status;
     }
@@ -113,6 +136,14 @@ const getAllAgents = async (req, res, next) => {
 
     const agents = await DeliveryAgent.findAndCountAll({
       where: whereClause,
+      include: [
+        {
+          model: require('../models').Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status'],
+          required: false
+        }
+      ],
       limit: parseInt(limit),
       offset: parseInt(offset),
       order: [['createdAt', 'DESC']]
@@ -149,7 +180,13 @@ const updateAgent = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    const agent = await DeliveryAgent.findByPk(id);
+    // Build where clause for finding agent
+    const whereClause = { id };
+    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
+      whereClause.agencyId = req.user.agencyId;
+    }
+
+    const agent = await DeliveryAgent.findOne({ where: whereClause });
     if (!agent) {
       return next(createError(404, 'Delivery agent not found'));
     }
@@ -230,7 +267,13 @@ const deleteAgent = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const agent = await DeliveryAgent.findByPk(id);
+    // Build where clause for finding agent
+    const whereClause = { id };
+    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
+      whereClause.agencyId = req.user.agencyId;
+    }
+
+    const agent = await DeliveryAgent.findOne({ where: whereClause });
     if (!agent) {
       return next(createError(404, 'Delivery agent not found'));
     }
@@ -259,7 +302,13 @@ const updateAgentStatus = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    const agent = await DeliveryAgent.findByPk(id);
+    // Build where clause for finding agent
+    const whereClause = { id };
+    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
+      whereClause.agencyId = req.user.agencyId;
+    }
+
+    const agent = await DeliveryAgent.findOne({ where: whereClause });
     if (!agent) {
       return next(createError(404, 'Delivery agent not found'));
     }

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User, DeliveryAgent, LoginOTP } = require('../models');
+const { User, DeliveryAgent, LoginOTP, AgencyOwner } = require('../models');
 const { 
   validateLogin, 
   validateSetupUser, 
@@ -8,13 +8,16 @@ const {
   validateUpdateProfile,
   validateRequestOTP,
   validateVerifyOTP,
-  validateDeleteAccount
+  validateDeleteAccount,
+  validateForgotPasswordRequest,
+  validateResetPassword
 } = require('../validations/authValidation');
 const { updateAgentProfileComprehensive } = require('../validations/deliveryAgentValidation');
 const { createError } = require('../utils/errorHandler');
 const logger = require('../utils/logger');
 const fs = require('fs');
 const path = require('path');
+const { Op } = require('sequelize');
 
 // Generate JWT token
 const generateToken = (userId) => {
@@ -31,7 +34,7 @@ const generateToken = (userId) => {
   );
 };
 
-// Login user
+// Login user (Admin, Customer, Agent, Agency Owner)
 const login = async (req, res, next) => {
   try {
     // Validate input
@@ -42,32 +45,109 @@ const login = async (req, res, next) => {
 
     const { email, password } = req.body;
 
-    // Find user
-    const user = await User.findOne({
+    console.log('🔍 LOGIN DEBUG:', { email, passwordLength: password.length });
+
+    // First try to find in User table (Admin, Customer, Agent)
+    let user = await User.findOne({
       where: { email }
     });
 
-    if (!user) {
-      return next(createError(401, 'Invalid email or password'));
+    console.log('👤 User found in User table:', !!user);
+
+    let userType = 'user';
+    let userData = null;
+
+    if (user) {
+      console.log('🔐 User found - checking password...');
+      // Verify password for User
+      const isPasswordValid = await user.comparePassword(password);
+      console.log('✅ User password valid:', isPasswordValid);
+      if (!isPasswordValid) {
+        console.log('❌ User password invalid');
+        return next(createError(401, 'Invalid email or password'));
+      }
+
+      // Blocked user cannot login
+      if (user.isBlocked) {
+        logger.warn(`Blocked user attempted login: ${email}`);
+        return next(createError(403, 'Your account is blocked by admin.'));
+      }
+
+      userType = user.role;
+      userData = user.toPublicJSON();
+    } else {
+      console.log('👤 User not found in User table, checking AgencyOwner...');
+      // If not found in User table, try AgencyOwner table
+      const agencyOwner = await AgencyOwner.findOne({
+        where: { email }
+      });
+
+      console.log('🏢 AgencyOwner found:', !!agencyOwner);
+      if (agencyOwner) {
+        console.log('🔐 AgencyOwner found - checking details...');
+        console.log('📧 AgencyOwner email:', agencyOwner.email);
+        console.log('✅ AgencyOwner isActive:', agencyOwner.isActive);
+        console.log('✅ AgencyOwner isEmailVerified:', agencyOwner.isEmailVerified);
+        console.log('🔑 AgencyOwner password hash length:', agencyOwner.password.length);
+        console.log('🔑 AgencyOwner password starts with $2b$:', agencyOwner.password.indexOf('$2b$') === 0);
+        
+        // Verify password for AgencyOwner
+        const isPasswordValid = await agencyOwner.comparePassword(password);
+        console.log('✅ AgencyOwner password valid:', isPasswordValid);
+        
+        if (!isPasswordValid) {
+          console.log('❌ AgencyOwner password invalid');
+          console.log('🔍 Password being tested:', password);
+          console.log('🔍 Stored hash:', agencyOwner.password);
+          return next(createError(401, 'Invalid email or password'));
+        }
+
+        // Check if agency owner is active
+        if (!agencyOwner.isActive) {
+          console.log('❌ AgencyOwner account inactive');
+          return next(createError(403, 'Your Account is inactive Please Contact Admin.'));
+        }
+
+        userType = 'agency_owner';
+        userData = {
+          id: agencyOwner.id,
+          email: agencyOwner.email,
+          name: agencyOwner.name,
+          phone: agencyOwner.phone,
+          role: 'agency_owner',
+          agencyId: agencyOwner.agencyId,
+          isEmailVerified: agencyOwner.isEmailVerified,
+          lastLoginAt: agencyOwner.lastLoginAt,
+          profileImage: agencyOwner.profileImage,
+          address: agencyOwner.address,
+          city: agencyOwner.city,
+          pincode: agencyOwner.pincode,
+          state: agencyOwner.state,
+          createdAt: agencyOwner.createdAt,
+          updatedAt: agencyOwner.updatedAt
+        };
+
+        // Update last login time
+        await agencyOwner.update({ lastLoginAt: new Date() });
+        console.log('✅ AgencyOwner login successful!');
+      } else {
+        console.log('❌ No AgencyOwner found with email:', email);
+        return next(createError(401, 'Invalid email or password'));
+      }
     }
 
-    // Verify password
-    const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
-      return next(createError(401, 'Invalid email or password'));
-    }
+    // Generate token with userType
+    const token = generateToken(userData.id);
 
-    // Generate token
-    const token = generateToken(user.id);
-
-    logger.info(`User logged in: ${user.email} (${user.role})`);
+    logger.info(`User logged in: ${email} (${userType})`);
 
     res.status(200).json({
       success: true,
       message: 'Login successful',
       data: {
-        user: user.toPublicJSON(),
-        token
+        user: userData,
+        token,
+        userType
       }
     });
   } catch (error) {
@@ -132,23 +212,77 @@ const setupUser = async (req, res, next) => {
 // Get current user profile
 const getProfile = async (req, res, next) => {
   try {
-    const user = await User.findByPk(req.user.userId);
+    console.log('🔍 PROFILE DEBUG - User ID:', req.user.userId);
+    console.log('🔍 PROFILE DEBUG - User role:', req.user.role);
     
-    if (!user) {
-      return next(createError(404, 'User not found'));
+    let user = await User.findByPk(req.user.userId);
+    let userData = null;
+    
+    console.log('🔍 PROFILE DEBUG - User found in User table:', !!user);
+    
+    if (user) {
+      // User found in User table
+      userData = user.toPublicJSON();
+    } else {
+      // Check AgencyOwner table
+      console.log('🔍 PROFILE DEBUG - Checking AgencyOwner table...');
+      const agencyOwner = await AgencyOwner.findByPk(req.user.userId);
+      console.log('🔍 PROFILE DEBUG - AgencyOwner found:', !!agencyOwner);
+      if (agencyOwner) {
+        // Get agency status for agency owner
+        const { Agency } = require('../models');
+        const agency = await Agency.findByPk(agencyOwner.agencyId);
+        
+        userData = {
+          id: agencyOwner.id,
+          email: agencyOwner.email,
+          name: agencyOwner.name,
+          phone: agencyOwner.phone,
+          role: 'agency_owner',
+          agencyId: agencyOwner.agencyId,
+          isEmailVerified: agencyOwner.isEmailVerified,
+          lastLoginAt: agencyOwner.lastLoginAt,
+          profileImage: agencyOwner.profileImage,
+          address: agencyOwner.address,
+          city: agencyOwner.city,
+          pincode: agencyOwner.pincode,
+          state: agencyOwner.state,
+          agencyStatus: agency ? agency.status : null, // Add agency status for agency owner
+          createdAt: agencyOwner.createdAt,
+          updatedAt: agencyOwner.updatedAt
+        };
+      } else {
+        return next(createError(404, 'User not found'));
+      }
     }
 
     // Prepare response data
     let responseData = {
-      user: user.toPublicJSON()
+      user: userData
     };
 
     // If agent, include delivery agent data
-    if (user.role === 'agent') {
+    if (userData.role === 'agent' && user) {
       // First check if user has deliveryAgentId
       if (user.deliveryAgentId) {
         const deliveryAgent = await DeliveryAgent.findByPk(user.deliveryAgentId);
         if (deliveryAgent) {
+          // Update user's name and phone with delivery agent data if they are null
+          const updateData = {};
+          if (!user.name && deliveryAgent.name) {
+            updateData.name = deliveryAgent.name;
+          }
+          if (!user.phone && deliveryAgent.phone) {
+            updateData.phone = deliveryAgent.phone;
+          }
+          
+          if (Object.keys(updateData).length > 0) {
+            await user.update(updateData);
+            // Update userData to reflect the changes
+            userData.name = deliveryAgent.name;
+            userData.phone = deliveryAgent.phone;
+          }
+          
           responseData.deliveryAgent = {
             id: deliveryAgent.id,
             name: deliveryAgent.name,
@@ -167,6 +301,23 @@ const getProfile = async (req, res, next) => {
         // Check if delivery agent exists with this email (admin might have added)
         const deliveryAgent = await DeliveryAgent.findOne({ where: { email: user.email } });
         if (deliveryAgent) {
+          // Update user with delivery agent data and deliveryAgentId
+          const updateData = {
+            deliveryAgentId: deliveryAgent.id
+          };
+          if (!user.name && deliveryAgent.name) {
+            updateData.name = deliveryAgent.name;
+          }
+          if (!user.phone && deliveryAgent.phone) {
+            updateData.phone = deliveryAgent.phone;
+          }
+          
+          await user.update(updateData);
+          // Update userData to reflect the changes
+          userData.name = deliveryAgent.name;
+          userData.phone = deliveryAgent.phone;
+          userData.deliveryAgentId = deliveryAgent.id;
+          
           responseData.deliveryAgent = {
             id: deliveryAgent.id,
             name: deliveryAgent.name,
@@ -180,9 +331,6 @@ const getProfile = async (req, res, next) => {
             joinedAt: deliveryAgent.joinedAt,
             profileImage: deliveryAgent.profileImage
           };
-          
-          // Update user with deliveryAgentId
-          await user.update({ deliveryAgentId: deliveryAgent.id });
         }
       }
     }
@@ -324,29 +472,56 @@ const updateProfile = async (req, res, next) => {
     const { name, phone, address, addresses } = value;
     const userId = req.user.userId;
 
-    const user = await User.findByPk(userId);
-    if (!user) {
-      return next(createError(404, 'User not found'));
+    // Check if user is in User table or AgencyOwner table
+    let user = await User.findByPk(userId);
+    let userType = 'user';
+    let userData = null;
+
+    if (user) {
+      userType = user.role; // This will be 'admin', 'customer', or 'agent'
+      // Update user data
+      const updateData = {};
+      if (name !== undefined) updateData.name = name;
+      if (phone !== undefined) updateData.phone = phone;
+      if (address !== undefined) updateData.address = address;
+      if (addresses !== undefined) updateData.addresses = addresses;
+
+      // Handle image upload if file is provided
+      if (req.file) {
+        // Use Cloudinary URL directly from multer-storage-cloudinary
+        updateData.profileImage = req.file.path;
+      }
+
+      await user.update(updateData);
+      userData = user.toPublicJSON();
+    } else {
+      // Try AgencyOwner table
+      const agencyOwner = await AgencyOwner.findByPk(userId);
+      if (agencyOwner) {
+        userType = 'agency_owner';
+        
+        // Update agency owner data
+        const updateData = {};
+        if (name !== undefined) updateData.name = name;
+        if (phone !== undefined) updateData.phone = phone;
+        if (address !== undefined) updateData.address = address;
+
+        // Handle image upload if file is provided
+        if (req.file) {
+          // Use Cloudinary URL directly from multer-storage-cloudinary
+          updateData.profileImage = req.file.path;
+        }
+
+        await agencyOwner.update(updateData);
+        userData = agencyOwner.toPublicJSON();
+      } else {
+        return next(createError(404, 'User not found'));
+      }
     }
-
-    // Update user data
-    const updateData = {};
-    if (name !== undefined) updateData.name = name;
-    if (phone !== undefined) updateData.phone = phone;
-    if (address !== undefined) updateData.address = address;
-    if (addresses !== undefined) updateData.addresses = addresses;
-
-    // Handle cloudinary image upload if file is provided
-    if (req.file) {
-      // Add cloudinary URL to update data
-      updateData.profileImage = req.file.path; // Cloudinary URL
-    }
-
-    await user.update(updateData);
 
     // If agent, also update delivery agent data
     let deliveryAgentData = null;
-    if (user.role === 'agent' && user.deliveryAgentId) {
+    if (userType === 'agent' && user && user.deliveryAgentId) {
       const deliveryAgent = await DeliveryAgent.findByPk(user.deliveryAgentId);
       if (deliveryAgent) {
         // Update delivery agent with user data
@@ -373,13 +548,13 @@ const updateProfile = async (req, res, next) => {
       }
     }
 
-    logger.info(`User profile updated: ${user.email}`);
+    logger.info(`User profile updated: ${userData.email}`);
 
     res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
       data: {
-        user: user.toPublicJSON(),
+        user: userData,
         ...(req.file && { imageUrl: req.file.path }), // Cloudinary URL
         ...(deliveryAgentData && { deliveryAgent: deliveryAgentData })
       }
@@ -415,12 +590,24 @@ const requestOTP = async (req, res, next) => {
     
     // If user doesn't exist, create a temporary user
     if (!user) {
+      // Check if user with same email exists with different role
+      const existingUser = await User.findOne({ where: { email } });
+      if (existingUser) {
+        return next(createError(400, `User with email ${email} already exists with role ${existingUser.role}. Please use the correct role.`));
+      }
+      
       user = await User.create({
         email,
         role,
         isProfileComplete: false
       });
       logger.info(`Temporary ${role} user created: ${email}`);
+    }
+
+    // Blocked user cannot request OTP
+    if (user.isBlocked) {
+      logger.warn(`Blocked user attempted OTP request: ${email} (${role})`);
+      return next(createError(403, 'Your account is blocked by admin.'));
     }
 
     // Generate OTP
@@ -502,6 +689,12 @@ const verifyOTP = async (req, res, next) => {
       return next(createError(404, 'User not found'));
     }
 
+    // Blocked user cannot login
+    if (user.isBlocked) {
+      logger.warn(`Blocked user attempted OTP verify: ${email} (${role})`);
+      return next(createError(403, 'Your account is blocked by admin.'));
+    }
+
     // Generate token
     const token = generateToken(user.id);
 
@@ -517,6 +710,24 @@ const verifyOTP = async (req, res, next) => {
       // Get delivery agent data by email (since user might not have deliveryAgentId yet)
       const deliveryAgent = await DeliveryAgent.findOne({ where: { email } });
       if (deliveryAgent) {
+        // Update user with delivery agent data and deliveryAgentId
+        const updateData = {
+          deliveryAgentId: deliveryAgent.id
+        };
+        if (!user.name && deliveryAgent.name) {
+          updateData.name = deliveryAgent.name;
+        }
+        if (!user.phone && deliveryAgent.phone) {
+          updateData.phone = deliveryAgent.phone;
+        }
+        
+        await user.update(updateData);
+        
+        // Update userData to reflect the changes
+        responseData.user.name = deliveryAgent.name;
+        responseData.user.phone = deliveryAgent.phone;
+        responseData.user.deliveryAgentId = deliveryAgent.id;
+        
         responseData.deliveryAgent = {
           id: deliveryAgent.id,
           name: deliveryAgent.name,
@@ -531,11 +742,6 @@ const verifyOTP = async (req, res, next) => {
           profileImage: deliveryAgent.profileImage,
           joinedAt: deliveryAgent.joinedAt
         };
-        
-        // Update user with deliveryAgentId for future reference
-        if (!user.deliveryAgentId) {
-          await user.update({ deliveryAgentId: deliveryAgent.id });
-        }
       }
     }
 
@@ -559,6 +765,140 @@ const logout = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Logged out successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Admin: Request OTP for password reset
+const forgotPasswordRequest = async (req, res, next) => {
+  try {
+    const { error, value } = validateForgotPasswordRequest.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    const { email } = value;
+
+    // Check if user exists in User table (Admin)
+    let user = await User.findOne({ where: { email, role: 'admin' } });
+    let userType = 'admin';
+
+    if (user) {
+      // Generate OTP for admin
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      // Delete any existing OTP for this email and role 'admin'
+      await LoginOTP.destroy({ where: { email, role: 'admin' } });
+
+      // Create new OTP
+      await LoginOTP.create({ email, otp, role: 'admin', expiresAt });
+
+      // Send OTP via email
+      const { sendEmail } = require('../config/email');
+      await sendEmail(email, 'passwordResetOTP', { email, otp });
+
+      logger.info(`Password reset OTP sent to admin ${email}`);
+    } else {
+      // Check if agency owner exists
+      const agencyOwner = await AgencyOwner.findOne({ where: { email } });
+      if (agencyOwner) {
+        // Allow password reset for agency owners regardless of email verification status
+        // if (!agencyOwner.isEmailVerified) {
+        //   return next(createError(403, 'Please verify your email before resetting password'));
+        // }
+
+        userType = 'agency_owner';
+
+        // Generate OTP for agency owner
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+        // Delete any existing OTP for this email and role 'agency_owner'
+        await LoginOTP.destroy({ where: { email, role: 'agency_owner' } });
+
+        // Create new OTP
+        await LoginOTP.create({ email, otp, role: 'agency_owner', expiresAt });
+
+        // Send OTP via email
+        const { sendEmail } = require('../config/email');
+        await sendEmail(email, 'passwordResetOTP', { email, otp });
+
+        logger.info(`Password reset OTP sent to agency owner ${email}`);
+      } else {
+        return next(createError(404, 'Account not found'));
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'OTP sent to email for password reset',
+      data: { email, userType }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Admin: Reset password using OTP
+const resetPassword = async (req, res, next) => {
+  try {
+    const { error, value } = validateResetPassword.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    const { email, otp, newPassword } = value;
+
+    // Try to find OTP record for admin first
+    let otpRecord = await LoginOTP.findOne({
+      where: { email, otp, role: 'admin', isUsed: false }
+    });
+
+    let userType = 'admin';
+    let user = null;
+
+    if (otpRecord) {
+      // Admin OTP found
+      user = await User.findOne({ where: { email, role: 'admin' } });
+      if (!user) {
+        return next(createError(404, 'Admin account not found'));
+      }
+    } else {
+      // Try agency owner OTP
+      otpRecord = await LoginOTP.findOne({
+        where: { email, otp, role: 'agency_owner', isUsed: false }
+      });
+
+      if (otpRecord) {
+        userType = 'agency_owner';
+        const agencyOwner = await AgencyOwner.findOne({ where: { email } });
+        if (!agencyOwner) {
+          return next(createError(404, 'Agency owner account not found'));
+        }
+        user = agencyOwner;
+      } else {
+        return next(createError(400, 'Invalid OTP'));
+      }
+    }
+
+    if (new Date() > new Date(otpRecord.expiresAt)) {
+      return next(createError(400, 'OTP has expired'));
+    }
+
+    // Update password (hooks will hash)
+    await user.update({ password: newPassword });
+
+    // Mark OTP as used
+    await otpRecord.update({ isUsed: true });
+
+    logger.info(`${userType} password reset successful for ${email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successful. Please login with new password.'
     });
   } catch (error) {
     next(error);
@@ -633,13 +973,22 @@ const deleteAccount = async (req, res, next) => {
   }
 };
 
-// Get all customers (Admin only)
+// Get all customers (Admin and Agency Owner)
 const getAllCustomers = async (req, res, next) => {
   try {
-    // Check if user is admin
-    const currentUser = await User.findByPk(req.user.userId);
-    if (!currentUser || currentUser.role !== 'admin') {
-      return next(createError(403, 'Only admin can access customer list'));
+    const userRole = req.user.role;
+    
+    // Check if user is admin or agency owner
+    if (userRole !== 'admin' && userRole !== 'agency_owner') {
+      return next(createError(403, 'Only admin and agency owners can access customer list'));
+    }
+
+    let currentUser;
+    if (userRole === 'admin') {
+      currentUser = await User.findByPk(req.user.userId);
+    } else {
+      // For agency owner, get from AgencyOwner table
+      currentUser = await AgencyOwner.findByPk(req.user.userId);
     }
 
     // Get query parameters for pagination and filtering
@@ -668,12 +1017,46 @@ const getAllCustomers = async (req, res, next) => {
       whereClause.isProfileComplete = status === 'active';
     }
 
+    // For agency owners, get only customers who have orders with their agency
+    if (userRole === 'agency_owner') {
+      const { Order } = require('../models');
+      
+      // Get customer emails who have orders with this agency
+      const agencyOrders = await Order.findAll({
+        where: { agencyId: req.user.agencyId },
+        attributes: ['customerEmail'],
+        group: ['customerEmail']
+      });
+      
+      const customerEmails = agencyOrders.map(order => order.customerEmail);
+      
+      if (customerEmails.length === 0) {
+        // No customers found for this agency
+        return res.status(200).json({
+          success: true,
+          message: 'No customers found for your agency',
+          data: {
+            customers: [],
+            pagination: {
+              currentPage: page,
+              totalPages: 0,
+              totalItems: 0,
+              itemsPerPage: limit
+            }
+          }
+        });
+      }
+      
+      // Add customer email filter
+      whereClause.email = { [Op.in]: customerEmails };
+    }
+
     // Get customers with pagination
     const { count, rows: customers } = await User.findAndCountAll({
       where: whereClause,
       attributes: [
         'id', 'name', 'email', 'phone', 'role', 'profileImage',
-        'address', 'addresses', 'isProfileComplete', 'registeredAt',
+        'address', 'addresses', 'isProfileComplete', 'registeredAt', 'isBlocked',
         'createdAt', 'updatedAt'
       ],
       order: [['createdAt', 'DESC']],
@@ -705,6 +1088,40 @@ const getAllCustomers = async (req, res, next) => {
     });
   } catch (error) {
     logger.error(`Error getting customers: ${error.message}`);
+    next(error);
+  }
+};
+
+// Admin: Block or unblock a user
+const setUserBlockStatus = async (req, res, next) => {
+  try {
+    const admin = await User.findByPk(req.user.userId);
+    if (!admin || admin.role !== 'admin') {
+      return next(createError(403, 'Only admin can perform this action'));
+    }
+
+    const { userId } = req.params;
+    const { isBlocked } = req.body;
+
+    if (typeof isBlocked !== 'boolean') {
+      return next(createError(400, 'isBlocked must be a boolean'));
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return next(createError(404, 'User not found'));
+    }
+
+    await user.update({ isBlocked });
+
+    logger.info(`Admin ${admin.email} set block=${isBlocked} for ${user.email} (${user.role})`);
+
+    res.status(200).json({
+      success: true,
+      message: `User ${isBlocked ? 'blocked' : 'unblocked'} successfully`,
+      data: { user: user.toPublicJSON() }
+    });
+  } catch (error) {
     next(error);
   }
 };
@@ -969,6 +1386,78 @@ const updateAgentProfileComplete = async (req, res, next) => {
   }
 };
 
+// Update agent status only (online/offline)
+const updateAgentStatus = async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const user = await User.findByPk(userId);
+    
+    if (!user) {
+      return next(createError(404, 'User not found'));
+    }
+
+    if (user.role !== 'agent') {
+      return next(createError(403, 'Only agents can update their status'));
+    }
+
+    // Get delivery agent data
+    let deliveryAgent;
+    if (user.deliveryAgentId) {
+      deliveryAgent = await DeliveryAgent.findByPk(user.deliveryAgentId);
+    } else {
+      // Find by email if deliveryAgentId is not set
+      deliveryAgent = await DeliveryAgent.findOne({ where: { email: user.email } });
+      if (deliveryAgent) {
+        await user.update({ deliveryAgentId: deliveryAgent.id });
+      }
+    }
+
+    if (!deliveryAgent) {
+      return next(createError(404, 'Delivery agent data not found'));
+    }
+
+    // Validate request body
+    const { error, value } = require('../validations/deliveryAgentValidation').updateStatus.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    const { status } = value;
+
+    // Update delivery agent status
+    await deliveryAgent.update({ status });
+
+    // Get updated data
+    const updatedAgent = await DeliveryAgent.findByPk(deliveryAgent.id);
+
+    logger.info(`Agent status updated: ${user.email} - ${status}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Agent status updated successfully',
+      data: {
+        user: user.toPublicJSON(),
+        deliveryAgent: {
+          id: updatedAgent.id,
+          name: updatedAgent.name,
+          email: updatedAgent.email,
+          phone: updatedAgent.phone,
+          vehicleNumber: updatedAgent.vehicleNumber,
+          panCardNumber: updatedAgent.panCardNumber,
+          aadharCardNumber: updatedAgent.aadharCardNumber,
+          drivingLicence: updatedAgent.drivingLicence,
+          bankDetails: updatedAgent.bankDetails,
+          status: updatedAgent.status,
+          profileImage: updatedAgent.profileImage,
+          joinedAt: updatedAgent.joinedAt
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   login,
   setupUser,
@@ -980,7 +1469,11 @@ module.exports = {
   updateProfile,
   updateAgentProfile,
   updateAgentProfileComplete,
+  updateAgentStatus,
   logout,
   deleteAccount,
-  getAllCustomers
+  getAllCustomers,
+  setUserBlockStatus,
+  forgotPasswordRequest,
+  resetPassword
 };

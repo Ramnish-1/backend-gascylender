@@ -22,7 +22,7 @@ const LoginOTP = sequelize.define('LoginOTP', {
     }
   },
   role: {
-    type: DataTypes.ENUM('customer', 'agent'),
+    type: DataTypes.ENUM('customer', 'agent', 'admin', 'agency_owner'),
     allowNull: false
   },
   expiresAt: {

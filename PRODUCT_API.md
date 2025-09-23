@@ -25,7 +25,47 @@ Authorization: Bearer <your-jwt-token>
   "price": 950.00,
   "stock": 50,
   "lowStockThreshold": 10,
-  "status": "active"
+  "status": "active",
+  "variants": [
+    {
+      "label": "14.2kg",
+      "unit": "kg",
+      "price": 950.00,
+      "stock": 50
+    },
+    {
+      "label": "19kg",
+      "unit": "kg", 
+      "price": 1200.00,
+      "stock": 30
+    }
+  ],
+  "images": [
+    "https://res.cloudinary.com/your-cloud/image1.jpg",
+    "https://res.cloudinary.com/your-cloud/image2.jpg"
+  ],
+  "agencies": [
+    {
+      "name": "Delhi Gas Agency",
+      "email": "delhi@example.com",
+      "phone": "9876543210",
+      "addressTitle": "Main Office",
+      "address": "123 Main Street, Connaught Place",
+      "city": "Delhi",
+      "pincode": "110001",
+      "landmark": "Near Metro Station"
+    },
+    {
+      "name": "Mumbai Gas Agency", 
+      "email": "mumbai@example.com",
+      "phone": "9876543211",
+      "addressTitle": "Branch Office",
+      "address": "456 Marine Drive",
+      "city": "Mumbai",
+      "pincode": "400001",
+      "landmark": "Near Gateway of India"
+    }
+  ]
 }
 ```
 
@@ -44,6 +84,46 @@ Authorization: Bearer <your-jwt-token>
       "stock": 50,
       "lowStockThreshold": 10,
       "status": "active",
+      "variants": [
+        {
+          "label": "14.2kg",
+          "unit": "kg",
+          "price": 950.00,
+          "stock": 50
+        },
+        {
+          "label": "19kg",
+          "unit": "kg", 
+          "price": 1200.00,
+          "stock": 30
+        }
+      ],
+      "images": [
+        "https://res.cloudinary.com/your-cloud/image1.jpg",
+        "https://res.cloudinary.com/your-cloud/image2.jpg"
+      ],
+      "agencies": [
+        {
+          "name": "Delhi Gas Agency",
+          "email": "delhi@example.com",
+          "phone": "9876543210",
+          "addressTitle": "Main Office",
+          "address": "123 Main Street, Connaught Place",
+          "city": "Delhi",
+          "pincode": "110001",
+          "landmark": "Near Metro Station"
+        },
+        {
+          "name": "Mumbai Gas Agency", 
+          "email": "mumbai@example.com",
+          "phone": "9876543211",
+          "addressTitle": "Branch Office",
+          "address": "456 Marine Drive",
+          "city": "Mumbai",
+          "pincode": "400001",
+          "landmark": "Near Gateway of India"
+        }
+      ],
       "createdAt": "2025-08-29T08:30:00.000Z",
       "updatedAt": "2025-08-29T08:30:00.000Z"
     }
@@ -266,14 +346,42 @@ DELETE /api/products/uuid-here
 
 ### Required Fields for Creation:
 - **productName**: 2-200 characters, must be unique
-- **unit**: 1-50 characters
-- **description**: 10-1000 characters
-- **price**: Positive number with max 2 decimal places
+- **description**: 3-2000 characters
+- **variants**: Array of variant objects (at least 1 required)
+- **agencies**: Array of agency objects (at least 1 required)
 
 ### Optional Fields:
+- **unit**: 1-50 characters
+- **price**: Positive number with max 2 decimal places
 - **stock**: Integer, minimum 0 (default: 0)
 - **lowStockThreshold**: Integer, minimum 0 (default: 10)
 - **status**: "active" or "inactive" (default: "active")
+- **images**: Array of image URLs
+- **category**: "lpg" or "accessories" (default: "lpg")
+
+### Variant Object Structure:
+```json
+{
+  "label": "14.2kg",           // Required: 1-50 characters
+  "unit": "kg",               // Optional: 1-20 characters
+  "price": 950.00,            // Required: Positive number with 2 decimal places
+  "stock": 50                 // Optional: Integer, minimum 0 (default: 0)
+}
+```
+
+### Agency Object Structure:
+```json
+{
+  "name": "Delhi Gas Agency",           // Required: 2-150 characters
+  "email": "delhi@example.com",         // Required: Valid email
+  "phone": "9876543210",                // Required: 10-15 digits
+  "addressTitle": "Main Office",        // Required: 2-50 characters
+  "address": "123 Main Street",         // Required: 5-500 characters
+  "city": "Delhi",                      // Required: 2-50 characters
+  "pincode": "110001",                  // Required: 6 digits
+  "landmark": "Near Metro Station"      // Optional: Max 100 characters
+}
+```
 
 ---
 
@@ -383,7 +491,18 @@ const ProductForm = () => {
     price: '',
     stock: 0,
     lowStockThreshold: 10,
-    status: 'active'
+    status: 'active',
+    variants: [{ label: '', unit: '', price: '', stock: 0 }],
+    agencies: [{ 
+      name: '', 
+      email: '', 
+      phone: '', 
+      addressTitle: '', 
+      address: '', 
+      city: '', 
+      pincode: '', 
+      landmark: '' 
+    }]
   });
 
   const handleSubmit = async (e) => {
@@ -404,6 +523,41 @@ const ProductForm = () => {
     }
   };
 
+  const addVariant = () => {
+    setFormData({
+      ...formData,
+      variants: [...formData.variants, { label: '', unit: '', price: '', stock: 0 }]
+    });
+  };
+
+  const addAgency = () => {
+    setFormData({
+      ...formData,
+      agencies: [...formData.agencies, { 
+        name: '', 
+        email: '', 
+        phone: '', 
+        addressTitle: '', 
+        address: '', 
+        city: '', 
+        pincode: '', 
+        landmark: '' 
+      }]
+    });
+  };
+
+  const updateVariant = (index, field, value) => {
+    const newVariants = [...formData.variants];
+    newVariants[index][field] = value;
+    setFormData({...formData, variants: newVariants});
+  };
+
+  const updateAgency = (index, field, value) => {
+    const newAgencies = [...formData.agencies];
+    newAgencies[index][field] = value;
+    setFormData({...formData, agencies: newAgencies});
+  };
+
   return (
     <form onSubmit={handleSubmit}>
       <input
@@ -411,6 +565,7 @@ const ProductForm = () => {
         placeholder="Product Name"
         value={formData.productName}
         onChange={(e) => setFormData({...formData, productName: e.target.value})}
+        required
       />
       <input
         type="text"
@@ -422,7 +577,106 @@ const ProductForm = () => {
         placeholder="Description"
         value={formData.description}
         onChange={(e) => setFormData({...formData, description: e.target.value})}
+        required
       />
+      
+      {/* Variants Section */}
+      <h3>Product Variants</h3>
+      {formData.variants.map((variant, index) => (
+        <div key={index}>
+          <input
+            type="text"
+            placeholder="Variant Label (e.g., 14.2kg)"
+            value={variant.label}
+            onChange={(e) => updateVariant(index, 'label', e.target.value)}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Unit (e.g., kg)"
+            value={variant.unit}
+            onChange={(e) => updateVariant(index, 'unit', e.target.value)}
+          />
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Price"
+            value={variant.price}
+            onChange={(e) => updateVariant(index, 'price', parseFloat(e.target.value))}
+            required
+          />
+          <input
+            type="number"
+            placeholder="Stock"
+            value={variant.stock}
+            onChange={(e) => updateVariant(index, 'stock', parseInt(e.target.value))}
+          />
+        </div>
+      ))}
+      <button type="button" onClick={addVariant}>Add Variant</button>
+
+      {/* Agencies Section */}
+      <h3>Associated Agencies</h3>
+      {formData.agencies.map((agency, index) => (
+        <div key={index}>
+          <input
+            type="text"
+            placeholder="Agency Name"
+            value={agency.name}
+            onChange={(e) => updateAgency(index, 'name', e.target.value)}
+            required
+          />
+          <input
+            type="email"
+            placeholder="Agency Email"
+            value={agency.email}
+            onChange={(e) => updateAgency(index, 'email', e.target.value)}
+            required
+          />
+          <input
+            type="tel"
+            placeholder="Phone Number"
+            value={agency.phone}
+            onChange={(e) => updateAgency(index, 'phone', e.target.value)}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Address Title"
+            value={agency.addressTitle}
+            onChange={(e) => updateAgency(index, 'addressTitle', e.target.value)}
+            required
+          />
+          <textarea
+            placeholder="Full Address"
+            value={agency.address}
+            onChange={(e) => updateAgency(index, 'address', e.target.value)}
+            required
+          />
+          <input
+            type="text"
+            placeholder="City"
+            value={agency.city}
+            onChange={(e) => updateAgency(index, 'city', e.target.value)}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Pincode"
+            value={agency.pincode}
+            onChange={(e) => updateAgency(index, 'pincode', e.target.value)}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Landmark (optional)"
+            value={agency.landmark}
+            onChange={(e) => updateAgency(index, 'landmark', e.target.value)}
+          />
+        </div>
+      ))}
+      <button type="button" onClick={addAgency}>Add Agency</button>
+
       <input
         type="number"
         step="0.01"

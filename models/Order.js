@@ -72,6 +72,15 @@ const Order = sequelize.define('Order', {
     type: DataTypes.ENUM('pending', 'confirmed', 'assigned', 'out_for_delivery', 'delivered', 'cancelled'),
     defaultValue: 'pending'
   },
+  // Agency assignment
+  agencyId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: 'agencies',
+      key: 'id'
+    }
+  },
   // Agent assignment
   assignedAgentId: {
     type: DataTypes.UUID,

@@ -44,6 +44,34 @@ const createOrderHandler = async (req, res, next) => {
     // Generate order number
     const orderNumber = generateOrderNumber();
 
+    // Determine agency from the first product in the order
+    // All products in an order should belong to the same agency
+    let agencyId = null;
+    if (value.items && value.items.length > 0) {
+      const firstProductId = value.items[0].productId;
+      const product = await Product.findByPk(firstProductId);
+      if (product) {
+        agencyId = product.agencyId;
+        
+        // Verify all products belong to the same agency
+        for (const item of value.items) {
+          const product = await Product.findByPk(item.productId);
+          if (!product) {
+            return next(createError(404, `Product with ID ${item.productId} not found`));
+          }
+          if (product.agencyId !== agencyId) {
+            return next(createError(400, 'All products in an order must belong to the same agency'));
+          }
+        }
+      } else {
+        return next(createError(404, `Product with ID ${firstProductId} not found`));
+      }
+    }
+
+    if (!agencyId) {
+      return next(createError(400, 'Unable to determine agency for order'));
+    }
+
     // Create order
     const order = await Order.create({
       orderNumber,
@@ -55,17 +83,19 @@ const createOrderHandler = async (req, res, next) => {
       subtotal: totals.subtotal,
       totalAmount: totals.totalAmount,
       paymentMethod: value.paymentMethod,
-      status: 'pending'
+      status: 'pending',
+      agencyId: agencyId
     });
 
-    logger.info(`Order created: ${order.orderNumber}`);
+    logger.info(`Order created: ${order.orderNumber} for agency: ${agencyId}`);
 
     // Emit socket notification
     emitNotification(NOTIFICATION_TYPES.ORDER_CREATED, {
       orderId: order.id,
       orderNumber: order.orderNumber,
       customerName: order.customerName,
-      totalAmount: order.totalAmount
+      totalAmount: order.totalAmount,
+      agencyId: agencyId
     });
 
     res.status(201).json({
@@ -120,6 +150,10 @@ const getAllOrders = async (req, res, next) => {
         return next(createError(403, 'Access denied. You can only view orders assigned to you'));
       }
 
+      if (userRole === 'agency_owner' && order.agencyId !== req.user.agencyId) {
+        return next(createError(403, 'Access denied. You can only view orders for your agency'));
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Order retrieved successfully',
@@ -151,9 +185,20 @@ const getAllOrders = async (req, res, next) => {
       whereClause.customerEmail = userEmail;
       console.log('👤 Customer filtering by email:', userEmail);
     } else if (userRole === 'agent') {
-      // Agent can only see orders assigned to them
+      // Agent can only see orders assigned to them with status 'assigned'
+      if (!req.user.deliveryAgentId) {
+        return next(createError(400, 'Agent profile not properly linked. Please contact admin.'));
+      }
       whereClause.assignedAgentId = req.user.deliveryAgentId;
-      console.log('🚚 Agent filtering by assignedAgentId:', req.user.deliveryAgentId);
+      whereClause.status = 'assigned'; // Only show assigned orders to agents
+      console.log('🚚 Agent filtering by assignedAgentId:', req.user.deliveryAgentId, 'and status: assigned');
+    } else if (userRole === 'agency_owner') {
+      // Agency owner can only see orders for their agency
+      if (!req.user.agencyId) {
+        return next(createError(400, 'Agency profile not properly linked. Please contact admin.'));
+      }
+      whereClause.agencyId = req.user.agencyId;
+      console.log('🏢 Agency owner filtering by agencyId:', req.user.agencyId);
     } else if (userRole === 'admin') {
       console.log('👑 Admin - no filtering applied');
     }
@@ -173,6 +218,12 @@ const getAllOrders = async (req, res, next) => {
           model: DeliveryAgent,
           as: 'DeliveryAgent',
           attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        },
+        {
+          model: require('../models').Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status'],
+          required: false
         }
       ],
       limit: parseInt(limit),
@@ -286,6 +337,11 @@ const assignAgentHandler = async (req, res, next) => {
       return next(createError(404, 'Delivery agent not found'));
     }
 
+    // Check if agent belongs to the same agency as the order
+    if (agent.agencyId !== order.agencyId) {
+      return next(createError(400, 'Agent must belong to the same agency as the order'));
+    }
+
     // Update order
     await order.update({
       assignedAgentId: value.agentId,
@@ -359,7 +415,7 @@ const sendOTPHandler = async (req, res, next) => {
     logger.info(`OTP sent for order: ${order.orderNumber}`);
 
     // Send email with OTP
-    await sendEmail(order.customerEmail, 'deliveryOTP', formatOrderResponse(order), otp);
+    await sendEmail(order.customerEmail, 'deliveryOTP', { ...formatOrderResponse(order), otp });
 
     // Emit socket notification
     emitNotification(NOTIFICATION_TYPES.OTP_SENT, {
@@ -507,6 +563,9 @@ const getOrdersByStatus = async (req, res, next) => {
       whereClause.customerEmail = userEmail;
     } else if (userRole === 'agent') {
       // Agent can only see orders assigned to them
+      if (!req.user.deliveryAgentId) {
+        return next(createError(400, 'Agent profile not properly linked. Please contact admin.'));
+      }
       whereClause.assignedAgentId = req.user.deliveryAgentId;
     }
     // Admin can see all orders (no additional filtering)
@@ -592,6 +651,266 @@ const getCustomerOrdersSummary = async (req, res, next) => {
   }
 };
 
+// Get agent delivery history
+const getAgentDeliveryHistory = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 10, status, startDate, endDate, customerName } = req.query;
+    const offset = (page - 1) * limit;
+    const userRole = req.user.role;
+    
+    // Only agents can access this endpoint
+    if (userRole !== 'agent') {
+      return next(createError(403, 'Access denied. Only agents can view delivery history.'));
+    }
+
+    // Check if agent profile is properly linked
+    if (!req.user.deliveryAgentId) {
+      return next(createError(400, 'Agent profile not properly linked. Please contact admin.'));
+    }
+
+    // Build where clause for agent's delivered orders
+    const whereClause = {
+      assignedAgentId: req.user.deliveryAgentId,
+      status: { [Op.in]: ['delivered', 'cancelled'] } // Only show completed orders
+    };
+
+    // Filter by status if provided
+    if (status && ['delivered', 'cancelled'].includes(status)) {
+      whereClause.status = status;
+    }
+
+    // Filter by date range if provided
+    if (startDate || endDate) {
+      whereClause.deliveredAt = {};
+      if (startDate) {
+        whereClause.deliveredAt[Op.gte] = new Date(startDate);
+      }
+      if (endDate) {
+        whereClause.deliveredAt[Op.lte] = new Date(endDate);
+      }
+    }
+
+    // Filter by customer name if provided
+    if (customerName) {
+      whereClause.customerName = { [Op.iLike]: `%${customerName}%` };
+    }
+
+    console.log('🔍 Agent History Filtering:', {
+      agentId: req.user.deliveryAgentId,
+      whereClause: JSON.stringify(whereClause, null, 2)
+    });
+
+    const orders = await Order.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: DeliveryAgent,
+          as: 'DeliveryAgent',
+          attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        }
+      ],
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [['deliveredAt', 'DESC'], ['cancelledAt', 'DESC'], ['createdAt', 'DESC']]
+    });
+
+    const totalPages = Math.ceil(orders.count / limit);
+
+    // Calculate summary statistics
+    const deliveredCount = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'delivered'
+      }
+    });
+
+    const cancelledCount = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'cancelled'
+      }
+    });
+
+    const totalEarnings = await Order.sum('totalAmount', {
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'delivered'
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Agent delivery history retrieved successfully',
+      data: {
+        orders: orders.rows.map(order => formatOrderResponse(order, true)),
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalItems: orders.count,
+          itemsPerPage: parseInt(limit)
+        },
+        summary: {
+          totalDelivered: deliveredCount,
+          totalCancelled: cancelledCount,
+          totalEarnings: totalEarnings || 0,
+          totalOrders: deliveredCount + cancelledCount
+        },
+        agent: {
+          id: req.user.deliveryAgentId,
+          name: orders.rows[0]?.DeliveryAgent?.name || 'Unknown',
+          phone: orders.rows[0]?.DeliveryAgent?.phone || 'Unknown',
+          vehicleNumber: orders.rows[0]?.DeliveryAgent?.vehicleNumber || 'Unknown'
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get agent delivery statistics
+const getAgentDeliveryStats = async (req, res, next) => {
+  try {
+    const { period = 'month' } = req.query; // day, week, month, year
+    const userRole = req.user.role;
+    
+    // Only agents can access this endpoint
+    if (userRole !== 'agent') {
+      return next(createError(403, 'Access denied. Only agents can view delivery statistics.'));
+    }
+
+    // Check if agent profile is properly linked
+    if (!req.user.deliveryAgentId) {
+      return next(createError(400, 'Agent profile not properly linked. Please contact admin.'));
+    }
+
+    // Calculate date range based on period
+    const now = new Date();
+    let startDate;
+    
+    switch (period) {
+      case 'day':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'week':
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+      case 'year':
+        startDate = new Date(now.getFullYear(), 0, 1);
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+
+    // Get statistics for the period
+    const deliveredThisPeriod = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'delivered',
+        deliveredAt: { [Op.gte]: startDate }
+      }
+    });
+
+    const cancelledThisPeriod = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'cancelled',
+        cancelledAt: { [Op.gte]: startDate }
+      }
+    });
+
+    const earningsThisPeriod = await Order.sum('totalAmount', {
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'delivered',
+        deliveredAt: { [Op.gte]: startDate }
+      }
+    });
+
+    // Get all delivered orders for the period with full details
+    const deliveredOrders = await Order.findAll({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'delivered',
+        deliveredAt: { [Op.gte]: startDate }
+      },
+      include: [
+        {
+          model: DeliveryAgent,
+          as: 'DeliveryAgent',
+          attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        }
+      ],
+      order: [['deliveredAt', 'DESC']]
+    });
+
+    // Get cancelled orders for the period with full details
+    const cancelledOrders = await Order.findAll({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'cancelled',
+        cancelledAt: { [Op.gte]: startDate }
+      },
+      include: [
+        {
+          model: DeliveryAgent,
+          as: 'DeliveryAgent',
+          attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        }
+      ],
+      order: [['cancelledAt', 'DESC']]
+    });
+
+    // Group by date manually with full order details
+    const dailyStats = {};
+    deliveredOrders.forEach(order => {
+      const date = order.deliveredAt.toISOString().split('T')[0];
+      if (!dailyStats[date]) {
+        dailyStats[date] = { 
+          count: 0, 
+          earnings: 0, 
+          orders: [] 
+        };
+      }
+      dailyStats[date].count += 1;
+      dailyStats[date].earnings += parseFloat(order.totalAmount);
+      dailyStats[date].orders.push(formatOrderResponse(order, true));
+    });
+
+    // Convert to array format with full details
+    const dailyBreakdown = Object.entries(dailyStats).map(([date, stats]) => ({
+      date,
+      count: stats.count.toString(),
+      earnings: stats.earnings.toFixed(2),
+      orders: stats.orders
+    }));
+
+    res.status(200).json({
+      success: true,
+      message: 'Agent delivery statistics retrieved successfully',
+      data: {
+        period,
+        periodStart: startDate,
+        periodEnd: now,
+        stats: {
+          delivered: deliveredThisPeriod,
+          cancelled: cancelledThisPeriod,
+          earnings: earningsThisPeriod || 0,
+          totalOrders: deliveredThisPeriod + cancelledThisPeriod
+        },
+        dailyBreakdown: dailyBreakdown,
+        deliveredOrders: deliveredOrders.map(order => formatOrderResponse(order, true)),
+        cancelledOrders: cancelledOrders.map(order => formatOrderResponse(order, true))
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   setSocketInstance,
   createOrderHandler,
@@ -602,5 +921,7 @@ module.exports = {
   verifyOTPHandler,
   cancelOrderHandler,
   getOrdersByStatus,
-  getCustomerOrdersSummary
+  getCustomerOrdersSummary,
+  getAgentDeliveryHistory,
+  getAgentDeliveryStats
 };

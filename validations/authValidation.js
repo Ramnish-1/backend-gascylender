@@ -106,8 +106,8 @@ const validateUpdateProfile = Joi.object({
   ).optional().messages({
     'alternatives.match': 'Addresses must be an array or valid JSON string'
   }),
-  role: Joi.string().valid('admin', 'customer', 'agent').optional().messages({
-    'any.only': 'Role must be admin, customer, or agent'
+  role: Joi.string().valid('admin', 'customer', 'agent', 'agency_owner').optional().messages({
+    'any.only': 'Role must be admin, customer, agent, or agency_owner'
   })
 });
 
@@ -139,6 +139,35 @@ const validateVerifyOTP = Joi.object({
   })
 });
 
+// Validation for admin forgot password request
+const validateForgotPasswordRequest = Joi.object({
+  email: Joi.string().email().required().messages({
+    'string.email': 'Please provide a valid email address',
+    'any.required': 'Email is required'
+  })
+});
+
+// Validation for admin reset password using OTP
+const validateResetPassword = Joi.object({
+  email: Joi.string().email().required().messages({
+    'string.email': 'Please provide a valid email address',
+    'any.required': 'Email is required'
+  }),
+  otp: Joi.string().pattern(/^[0-9]{6}$/).required().messages({
+    'string.pattern.base': 'OTP must be 6 digits',
+    'any.required': 'OTP is required'
+  }),
+  newPassword: Joi.string().min(6).max(100).required().messages({
+    'string.min': 'Password must be at least 6 characters long',
+    'string.max': 'Password cannot exceed 100 characters',
+    'any.required': 'New password is required'
+  }),
+  confirmPassword: Joi.any().valid(Joi.ref('newPassword')).required().messages({
+    'any.only': 'Passwords do not match',
+    'any.required': 'Confirm password is required'
+  })
+});
+
 // Validation for deleting account
 const validateDeleteAccount = Joi.object({
   confirmation: Joi.string().valid('DELETE_MY_ACCOUNT').required().messages({
@@ -155,5 +184,7 @@ module.exports = {
   validateUpdateProfile,
   validateRequestOTP,
   validateVerifyOTP,
-  validateDeleteAccount
+  validateDeleteAccount,
+  validateForgotPasswordRequest,
+  validateResetPassword
 };
