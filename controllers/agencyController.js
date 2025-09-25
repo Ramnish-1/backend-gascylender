@@ -29,6 +29,13 @@ const create = async (req, res, next) => {
     const ownerExists = await AgencyOwner.findOne({ where: { email: value.email } });
     if (ownerExists) return next(createError(400, 'Agency owner with this email already exists'));
 
+    // Unique phone number check for both Agency and AgencyOwner
+    const agencyPhoneExists = await Agency.findOne({ where: { phone: value.phone } });
+    if (agencyPhoneExists) return next(createError(400, 'Agency with this phone number already exists'));
+
+    const ownerPhoneExists = await AgencyOwner.findOne({ where: { phone: value.phone } });
+    if (ownerPhoneExists) return next(createError(400, 'Agency owner with this phone number already exists'));
+
     const token = crypto.randomBytes(24).toString('hex');
     const confirmationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
@@ -39,9 +46,9 @@ const create = async (req, res, next) => {
     try {
       const agency = await Agency.create({
         ...value,
-        status: 'inactive',
-        confirmationToken: token,
-        confirmationExpiresAt
+        status: 'active',
+        confirmationToken: null,
+        confirmationExpiresAt: null
       }, { transaction });
 
       // Generate random password for agency owner
@@ -58,8 +65,10 @@ const create = async (req, res, next) => {
         city: agency.city,
         pincode: agency.pincode,
         state: 'Delhi', // Default state
-        confirmationToken: token,
-        confirmationTokenExpires: confirmationExpiresAt
+        isActive: true,
+        isEmailVerified: true,
+        confirmationToken: null,
+        confirmationTokenExpires: null
       }, { transaction });
 
       // Update agency with owner
@@ -70,45 +79,152 @@ const create = async (req, res, next) => {
       // Commit transaction
       await transaction.commit();
 
-      // Continue with email sending after successful transaction
-      const confirmUrl = `${process.env.BACKEND_BASE_URL || 'http://localhost:5000'}/api/agencies/confirm?token=${token}`;
-      
-      // Send confirmation email with login credentials
+      // Create compact professional email template with inline CSS for email client compatibility
       const emailTemplate = `
-        <h2>Welcome to LPG Gas Platform</h2>
-        <p>Dear ${agency.name} Team,</p>
-        <p>Your agency has been registered successfully!</p>
-        <p><strong>Agency Details:</strong></p>
-        <ul>
-          <li><strong>Name:</strong> ${agency.name}</li>
-          <li><strong>Email:</strong> ${agency.email}</li>
-          <li><strong>Phone:</strong> ${agency.phone}</li>
-          <li><strong>Address:</strong> ${agency.address}, ${agency.city} - ${agency.pincode}</li>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title style="margin: 0 0 8px 0; font-size: 24px; font-weight: bold; color: #1a202c; letter-spacing: -0.5px;">Welcome to LPG Gas Platform</title>
+        </head>
+        <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: Arial, sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f7fa; padding: 15px;">
+            <tr>
+              <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); overflow: hidden;">
+                  <!-- Content -->
+                  <tr>
+                    <td style="padding: 10px;">
+                      
+                      <!-- Welcome Section -->
+                      <div style="text-align: center; margin-bottom: 15px;">
+                        <h2 style="margin: 0 0 6px 0; font-size: 24px; font-weight: bold; color: #1a202c; letter-spacing: -0.5px;">Welcome ${agency.name}! 🎉</h2>
+                        <p style="margin: 0; font-size: 16px; color: #718096;">Your agency has been successfully registered and is ready to use</p>
+                      </div>
+                      
+                      <!-- Agency Information Card -->
+                      <div style="background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%); border-radius: 8px; padding: 18px; margin: 15px 0; border: 1px solid #e2e8f0;">
+                        <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: bold; color: #2d3748;">🏢 Agency Information</h3>
+                        
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td style="padding: 6px 0; border-bottom: 1px solid #e2e8f0;">
+                              <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Agency Name</td>
+                                  <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.name}</td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px 0; border-bottom: 1px solid #e2e8f0;">
+                              <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Email Address</td>
+                                  <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.email}</td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 6px 0; border-bottom: 1px solid #e2e8f0;">
+                              <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Phone Number</td>
+                                  <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.phone}</td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 8px 0;">
+                              <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Location</td>
+                                  <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.address}, ${agency.city} - ${agency.pincode}</td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                      
+                      <!-- Credentials Card -->
+                      <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; padding: 18px; margin: 15px 0; color: white;">
+                        <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: bold;">🔐 Your Login Credentials</h3>
+                        
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td style="padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.2);">
+                              <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Email</td>
+                                  <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${agency.email}</td>
+                                  <td style="width: 20%; text-align: right;">
+                                    <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding: 8px 0;">
+                              <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Password</td>
+                                  <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${randomPassword}</td>
+                                  <td style="width: 20%; text-align: right;">
+                                    <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      </div>
+                      
+                      <!-- Login Button -->
+                      <div style="text-align: center; margin: 18px 0;">
+                        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/agency/login" style="display: inline-block; background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 15px rgba(72, 187, 120, 0.3);color:black;">🚀 Access Your Dashboard</a>
+                      </div>
+                      
+                      <!-- Security Section -->
+                      <div style="background: linear-gradient(135deg, #fef5e7 0%, #fed7aa 100%); border: 1px solid #f6ad55; border-radius: 8px; padding: 15px; margin: 15px 0;">
+                        <h4 style="margin: 0 0 8px 0; color: #c05621; font-size: 15px; font-weight: bold;">🛡️ Security Reminders</h4>
+                        <ul style="color: #c05621; margin: 0; padding-left: 18px;">
+                          <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Change your password immediately after first login</li>
+                          <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Keep your login credentials secure and confidential</li>
+                          <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Contact our support team if you need any assistance</li>
+                          <li style="margin-bottom: 0; font-size: 13px; line-height: 1.4;">Regularly update your profile information</li>
         </ul>
-        
-        <p><strong>Your Login Credentials:</strong></p>
-        <ul>
-          <li><strong>Email:</strong> ${agency.email}</li>
-          <li><strong>Password:</strong> ${randomPassword}</li>
-        </ul>
-        
-        <p>Please click the link below to confirm your agency and activate your account:</p>
-        <a href="${confirmUrl}" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Confirm Agency</a>
-        
-        <p><strong>Important:</strong></p>
-        <ul>
-          <li>Please change your password after first login</li>
-          <li>This link will expire in 24 hours</li>
-          <li>After confirmation, you can login at: <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/agency/login">Agency Login</a></li>
-        </ul>
-        
-        <p>Best regards,<br>LPG Gas Platform Team</p>
+                      </div>
+                      
+                    </td>
+                  </tr>
+                  
+                  <!-- Footer -->
+                  <tr>
+                    <td style="background-color: #2d3748; color: white; padding: 25px; text-align: center;">
+                      <p style="margin: 0; color: #a0aec0; font-size: 13px;">Best regards,</p>
+                      <p style="margin: 5px 0 0 0; color: white; font-weight: bold; font-size: 14px;">LPG Gas Platform Team</p>
+                      <p style="margin: 15px 0 0 0; font-size: 11px; color: #718096;">This is an automated message. Please do not reply to this email.</p>
+                    </td>
+                  </tr>
+                  
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
       `;
 
       // Send response first
       res.status(201).json({
         success: true,
-        message: 'Agency created successfully. Login credentials sent to agency email.',
+        message: 'Agency created and activated successfully. Login credentials sent to agency email.',
         data: {
           agency: agency,
           owner: {
@@ -143,7 +259,7 @@ const create = async (req, res, next) => {
           await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: agency.email,
-            subject: 'Agency Registration Complete - Login Credentials',
+            subject: '🚀 Welcome to LPG Gas Platform - Your Agency is Ready!',
             html: emailTemplate
           });
 

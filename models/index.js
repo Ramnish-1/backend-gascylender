@@ -4,6 +4,7 @@ const Product = require('./Product');
 const Order = require('./Order');
 const LoginOTP = require('./LoginOTP');
 const Agency = require('./Agency');
+const AgencyInventory = require('./AgencyInventory');
 const AgencyOwner = require('./AgencyOwner');
 const TermsAndConditions = require('./TermsAndConditions');
 const PrivacyPolicy = require('./PrivacyPolicy');
@@ -30,15 +31,26 @@ AgencyOwner.hasOne(Agency, {
   as: 'Agency' 
 });
 
-// Product and Agency associations
-Product.belongsTo(Agency, { 
-  foreignKey: 'agencyId', 
-  as: 'Agency' 
+// Product and AgencyInventory associations
+Product.hasMany(AgencyInventory, { 
+  foreignKey: 'productId', 
+  as: 'AgencyInventory' 
 });
 
-Agency.hasMany(Product, { 
+AgencyInventory.belongsTo(Product, { 
+  foreignKey: 'productId', 
+  as: 'Product' 
+});
+
+// Agency and AgencyInventory associations
+Agency.hasMany(AgencyInventory, { 
   foreignKey: 'agencyId', 
-  as: 'Products' 
+  as: 'Inventory' 
+});
+
+AgencyInventory.belongsTo(Agency, { 
+  foreignKey: 'agencyId', 
+  as: 'Agency' 
 });
 
 // DeliveryAgent and Agency associations
@@ -70,6 +82,7 @@ module.exports = {
   Order,
   LoginOTP,
   Agency,
+  AgencyInventory,
   AgencyOwner,
   TermsAndConditions,
   PrivacyPolicy

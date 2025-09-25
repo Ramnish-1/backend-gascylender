@@ -267,7 +267,7 @@ const getProfile = async (req, res, next) => {
       if (user.deliveryAgentId) {
         const deliveryAgent = await DeliveryAgent.findByPk(user.deliveryAgentId);
         if (deliveryAgent) {
-          // Update user's name and phone with delivery agent data if they are null
+          // Update user's name, phone, and profileImage with delivery agent data if they are null
           const updateData = {};
           if (!user.name && deliveryAgent.name) {
             updateData.name = deliveryAgent.name;
@@ -275,12 +275,16 @@ const getProfile = async (req, res, next) => {
           if (!user.phone && deliveryAgent.phone) {
             updateData.phone = deliveryAgent.phone;
           }
+          if (!user.profileImage && deliveryAgent.profileImage) {
+            updateData.profileImage = deliveryAgent.profileImage;
+          }
           
           if (Object.keys(updateData).length > 0) {
             await user.update(updateData);
             // Update userData to reflect the changes
             userData.name = deliveryAgent.name;
             userData.phone = deliveryAgent.phone;
+            userData.profileImage = deliveryAgent.profileImage;
           }
           
           responseData.deliveryAgent = {
@@ -311,11 +315,15 @@ const getProfile = async (req, res, next) => {
           if (!user.phone && deliveryAgent.phone) {
             updateData.phone = deliveryAgent.phone;
           }
+          if (!user.profileImage && deliveryAgent.profileImage) {
+            updateData.profileImage = deliveryAgent.profileImage;
+          }
           
           await user.update(updateData);
           // Update userData to reflect the changes
           userData.name = deliveryAgent.name;
           userData.phone = deliveryAgent.phone;
+          userData.profileImage = deliveryAgent.profileImage;
           userData.deliveryAgentId = deliveryAgent.id;
           
           responseData.deliveryAgent = {
@@ -416,14 +424,21 @@ const completeAgentProfile = async (req, res, next) => {
     }
 
     // Update user profile
-    await user.update({
+    const updateData = {
       name: value.name,
       phone: value.phone,
       address: value.address,
       deliveryAgentId: deliveryAgent.id,
       isProfileComplete: true,
       registeredAt: new Date()
-    });
+    };
+    
+    // Include profile image from delivery agent if user doesn't have one
+    if (!user.profileImage && deliveryAgent.profileImage) {
+      updateData.profileImage = deliveryAgent.profileImage;
+    }
+    
+    await user.update(updateData);
 
     logger.info(`Agent profile completed: ${user.email}`);
 

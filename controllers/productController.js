@@ -1,13 +1,18 @@
-const { Product } = require('../models');
-const { createProduct, updateProduct, updateStatus } = require('../validations/productValidation');
+const { Product, AgencyInventory, Agency } = require('../models');
+const { createProduct, updateProduct, updateStatus, agencyInventorySchema } = require('../validations/productValidation');
 const { createError } = require('../utils/errorHandler');
 const logger = require('../utils/logger');
 const { Op, Sequelize } = require('sequelize');
 
-// Create a new product
+// Create a new product (Admin only)
 const createProductHandler = async (req, res, next) => {
   try {
-    // If variants, images, or agency are passed as JSON strings (form-data), parse them
+    // Only admin can create products
+    if (!req.user || req.user.role !== 'admin') {
+      return next(createError(403, 'Only admin can create products'));
+    }
+
+    // If variants, images are passed as JSON strings (form-data), parse them
     const body = { ...req.body };
     if (typeof body.variants === 'string') {
       try { body.variants = JSON.parse(body.variants); } catch (_) {}
@@ -15,19 +20,9 @@ const createProductHandler = async (req, res, next) => {
     if (typeof body.images === 'string') {
       try { body.images = JSON.parse(body.images); } catch (_) {}
     }
-    if (typeof body.agencies === 'string') {
-      try { body.agencies = JSON.parse(body.agencies); } catch (_) {}
-    }
 
-    // Set agencyId from token if user is agency owner
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      body.agencyId = req.user.agencyId;
-    } else if (req.user && req.user.role === 'admin' && body.agencyId) {
-      // Admin can specify agencyId
-      body.agencyId = body.agencyId;
-    } else if (!req.user || req.user.role !== 'admin') {
-      return next(createError(403, 'Only agency owners and admins can create products'));
-    }
+    // Admin creates products without agencyId (global products)
+    // Agency-specific inventory will be managed separately
 
     // If base64 images provided, upload them to Cloudinary
     if (Array.isArray(body.images)) {
@@ -58,21 +53,20 @@ const createProductHandler = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    // Check if product name already exists for this agency
+    // Check if product name already exists globally
     const existingProduct = await Product.findOne({ 
       where: { 
-        productName: value.productName,
-        agencyId: value.agencyId
+        productName: value.productName
       } 
     });
     if (existingProduct) {
-      return next(createError(400, 'Product name already exists for this agency'));
+      return next(createError(400, 'Product name already exists'));
     }
 
     // Create product
     const product = await Product.create(value);
 
-    logger.info(`Product created: ${product.productName} for agency: ${value.agencyId}`);
+    logger.info(`Product created: ${product.productName} by admin`);
 
     res.status(201).json({
       success: true,
@@ -87,55 +81,70 @@ const createProductHandler = async (req, res, next) => {
 // Get all products (comprehensive endpoint)
 const getAllProducts = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, status, search, id, agencyId, agencyEmail, agencyName, agencyCity, agencyPhone } = req.query;
+    const { page = 1, limit = 10, status, search, id, agencyId, agencyEmail, agencyName, agencyCity, agencyPhone, includeInventory } = req.query;
     const offset = (page - 1) * limit;
 
     // If ID is provided, get specific product
     if (id) {
       const whereClause = { id };
       
-      // Filter by agency if user is agency owner
-      if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-        whereClause.agencyId = req.user.agencyId;
-      }
+      // Note: Products are no longer directly associated with agencies
+      // Agency filtering is now handled through AgencyInventory
       
+      // Build include options based on whether inventory data is requested
+      const includeOptions = [];
+      
+      if (includeInventory === 'true') {
+        includeOptions.push({
+          model: AgencyInventory,
+          as: 'AgencyInventory',
+          include: [
+            {
+              model: Agency,
+              as: 'Agency',
+              attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
+            }
+          ],
+          required: false
+        });
+      }
+
       const product = await Product.findOne({ 
         where: whereClause,
-        include: [
-          {
-            model: require('../models').Agency,
-            as: 'Agency',
-            attributes: ['id', 'name', 'email', 'phone', 'city', 'status'],
-            required: false
-          }
-        ]
+        include: includeOptions
       });
       if (!product) {
         return next(createError(404, 'Product not found'));
       }
 
+      // Transform product to show agency-specific variants when agencyId is provided
+      const productData = product.toJSON();
+      
+      // If agencyId is provided and product has agency inventory, show agency-specific variants
+      if (agencyId && productData.AgencyInventory && productData.AgencyInventory.length > 0) {
+        const agencyInventory = productData.AgencyInventory.find(inv => inv.agencyId === agencyId);
+        if (agencyInventory && agencyInventory.agencyVariants && agencyInventory.agencyVariants.length > 0) {
+          // Replace global variants with agency-specific variants
+          productData.variants = agencyInventory.agencyVariants;
+          productData.agencyPrice = agencyInventory.agencyPrice;
+          productData.agencyStock = agencyInventory.stock;
+          productData.agencyLowStockThreshold = agencyInventory.lowStockThreshold;
+          productData.agencyIsActive = agencyInventory.isActive;
+        }
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Product retrieved successfully',
-        data: { product }
+        data: { product: productData }
       });
     }
 
     // Build where clause
     const whereClause = {};
     
-    // Filter by agency if user is agency owner
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      whereClause.agencyId = req.user.agencyId;
-    }
-    
-    // Filter by specific agencyId if provided (admin and customer)
-    if (agencyId && req.user && (req.user.role === 'admin' || req.user.role === 'customer')) {
-      whereClause.agencyId = agencyId;
-      console.log('🔍 Agency Filter Applied:', { agencyId, userRole: req.user.role });
-    }
-    
-    console.log('🔍 Final Where Clause:', JSON.stringify(whereClause, null, 2));
+    // Note: Products are no longer directly associated with agencies
+    // Agency filtering is now handled through AgencyInventory
     
     if (status) {
       whereClause.status = status;
@@ -148,55 +157,30 @@ const getAllProducts = async (req, res, next) => {
       ];
     }
 
-    // Optional filters on embedded agencies JSON array (Postgres JSONB)
-    // Use text casting of JSONB for robust partial ILIKE matches across array elements
-    const andConditions = [];
-    if (agencyEmail) {
-      andConditions.push(
-        Sequelize.where(
-          Sequelize.cast(Sequelize.col('agencies'), 'text'),
-          { [Op.iLike]: `%${agencyEmail}%` }
-        )
-      );
-    }
-    if (agencyName) {
-      andConditions.push(
-        Sequelize.where(
-          Sequelize.cast(Sequelize.col('agencies'), 'text'),
-          { [Op.iLike]: `%${agencyName}%` }
-        )
-      );
-    }
-    if (agencyCity) {
-      andConditions.push(
-        Sequelize.where(
-          Sequelize.cast(Sequelize.col('agencies'), 'text'),
-          { [Op.iLike]: `%${agencyCity}%` }
-        )
-      );
-    }
-    if (agencyPhone) {
-      andConditions.push(
-        Sequelize.where(
-          Sequelize.cast(Sequelize.col('agencies'), 'text'),
-          { [Op.iLike]: `%${agencyPhone}%` }
-        )
-      );
-    }
-    if (andConditions.length > 0) {
-      whereClause[Op.and] = (whereClause[Op.and] || []).concat(andConditions);
+    // Agency filtering is now handled through AgencyInventory relationships
+    // No need for embedded agencies JSON filtering
+
+    // Build include options based on whether inventory data is requested or agencyId is provided
+    const includeOptions = [];
+    
+    if (includeInventory === 'true' || agencyId) {
+      includeOptions.push({
+        model: AgencyInventory,
+        as: 'AgencyInventory',
+        include: [
+          {
+            model: Agency,
+            as: 'Agency',
+            attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
+          }
+        ],
+        required: false
+      });
     }
 
     const products = await Product.findAndCountAll({
       where: whereClause,
-      include: [
-        {
-          model: require('../models').Agency,
-          as: 'Agency',
-          attributes: ['id', 'name', 'email', 'phone', 'city', 'status'],
-          required: false
-        }
-      ],
+      include: includeOptions,
       limit: parseInt(limit),
       offset: parseInt(offset),
       order: [['createdAt', 'DESC']]
@@ -204,15 +188,64 @@ const getAllProducts = async (req, res, next) => {
 
     const totalPages = Math.ceil(products.count / limit);
 
+    // Transform products to show agency-specific variants when agencyId is provided
+    let transformedProducts = products.rows.map(product => {
+      const productData = product.toJSON();
+      
+      // If agencyId is provided and product has agency inventory, show agency-specific variants
+      if (agencyId && productData.AgencyInventory && productData.AgencyInventory.length > 0) {
+        const agencyInventory = productData.AgencyInventory.find(inv => inv.agencyId === agencyId);
+        if (agencyInventory && agencyInventory.agencyVariants && agencyInventory.agencyVariants.length > 0) {
+          // Replace global variants with agency-specific variants
+          productData.variants = agencyInventory.agencyVariants;
+          productData.agencyPrice = agencyInventory.agencyPrice;
+          productData.agencyStock = agencyInventory.stock;
+          productData.agencyLowStockThreshold = agencyInventory.lowStockThreshold;
+          productData.agencyIsActive = agencyInventory.isActive;
+        }
+        
+        // Filter AgencyInventory to only show the requested agency's data
+        productData.AgencyInventory = productData.AgencyInventory.filter(inv => inv.agencyId === agencyId);
+      }
+      
+      return productData;
+    });
+
+    // Filter products based on status for customers
+    // If agencyId is provided (customer view), apply status filtering
+    if (agencyId && req.user && req.user.role === 'customer') {
+      transformedProducts = transformedProducts.filter(product => {
+        // First check if product has agency inventory
+        if (product.AgencyInventory && product.AgencyInventory.length > 0) {
+          const agencyInventory = product.AgencyInventory.find(inv => inv.agencyId === agencyId);
+          if (agencyInventory) {
+            // Agency status is priority - if agency says active, show it
+            if (agencyInventory.isActive === true) {
+              return true; // Show product regardless of admin status
+            } else {
+              return false; // Hide product if agency says inactive
+            }
+          }
+        }
+        
+        // If no agency inventory found, don't show the product
+        return false;
+      });
+    }
+
+    // Update pagination for filtered results
+    const filteredCount = transformedProducts.length;
+    const filteredTotalPages = Math.ceil(filteredCount / limit);
+
     res.status(200).json({
       success: true,
       message: 'Products retrieved successfully',
       data: {
-        products: products.rows,
+        products: transformedProducts,
         pagination: {
           currentPage: parseInt(page),
-          totalPages,
-          totalItems: products.count,
+          totalPages: filteredTotalPages,
+          totalItems: filteredCount,
           itemsPerPage: parseInt(limit)
         }
       }
@@ -238,6 +271,12 @@ const updateProductHandler = async (req, res, next) => {
     if (typeof body.agencies === 'string') {
       try { body.agencies = JSON.parse(body.agencies); } catch (_) {}
     }
+    if (typeof body.imagesToDelete === 'string') {
+      try { body.imagesToDelete = JSON.parse(body.imagesToDelete); } catch (_) {}
+    }
+    if (typeof body.existingImages === 'string') {
+      try { body.existingImages = JSON.parse(body.existingImages); } catch (_) {}
+    }
 
     // If base64 images provided during update, upload them to Cloudinary
     if (Array.isArray(body.images)) {
@@ -252,15 +291,68 @@ const updateProductHandler = async (req, res, next) => {
       }
     }
 
-    // Handle uploaded images (cloudinary - append)
+    // Image handling moved to comprehensive logic below
+
+    // Handle image deletion - get current product first to access existing images
+    // Note: Products are no longer associated with agencies directly
+    const product = await Product.findOne({ where: { id } });
+    if (!product) {
+      return next(createError(404, 'Product not found'));
+    }
+
+    // Process image operations (deletion and existing images)
+    let finalImages = [];
+    
+    // Start with existing images if provided, otherwise use current product images
+    if (Array.isArray(body.existingImages) && body.existingImages.length > 0) {
+      finalImages = [...body.existingImages];
+    } else {
+      finalImages = [...(product.images || [])];
+    }
+    
+    // Remove images that are marked for deletion
+    if (Array.isArray(body.imagesToDelete) && body.imagesToDelete.length > 0) {
+      const cloudinary = require('../config/cloudinary');
+      
+      // Delete images from Cloudinary
+      try {
+        await Promise.all(
+          body.imagesToDelete.map(async (imageUrl) => {
+            try {
+              // Extract public_id from Cloudinary URL
+              const publicId = imageUrl.split('/').pop().split('.')[0];
+              await cloudinary.uploader.destroy(publicId);
+              logger.info(`Deleted image from Cloudinary: ${publicId}`);
+            } catch (deleteError) {
+              logger.warn(`Failed to delete image from Cloudinary: ${imageUrl}`, deleteError);
+              // Continue even if one image deletion fails
+            }
+          })
+        );
+      } catch (error) {
+        logger.error('Error deleting images from Cloudinary:', error);
+        // Continue with the update even if Cloudinary deletion fails
+      }
+      
+      // Remove deleted images from the final array
+      finalImages = finalImages.filter(img => !body.imagesToDelete.includes(img));
+    }
+    
+    // Add any new uploaded images (from req.files)
     if (Array.isArray(req.files) && req.files.length > 0) {
       const uploadedUrls = req.files.map(f => f.path); // Cloudinary URL
-      if (Array.isArray(body.images)) {
-        body.images = [...body.images, ...uploadedUrls];
-      } else {
-        body.images = uploadedUrls;
-      }
+      finalImages = [...finalImages, ...uploadedUrls];
     }
+    
+    // Add any base64 images that were processed earlier
+    if (Array.isArray(body.images)) {
+      // Filter out base64 images (already processed) and keep URL strings
+      const urlImages = body.images.filter(img => typeof img === 'string' && !/^data:image\//i.test(img));
+      finalImages = [...finalImages, ...urlImages];
+    }
+    
+    // Update the images array in the body
+    body.images = finalImages;
 
     // Validate request body
     const { error, value } = updateProduct.validate(body);
@@ -268,27 +360,17 @@ const updateProductHandler = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    // Build where clause for finding product
-    const whereClause = { id };
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      whereClause.agencyId = req.user.agencyId;
-    }
+    // Product already found above for image deletion logic
 
-    const product = await Product.findOne({ where: whereClause });
-    if (!product) {
-      return next(createError(404, 'Product not found'));
-    }
-
-    // Check if product name is being updated and if it already exists for this agency
+    // Check if product name is being updated and if it already exists globally
     if (value.productName && value.productName !== product.productName) {
       const existingProduct = await Product.findOne({ 
         where: { 
-          productName: value.productName,
-          agencyId: product.agencyId
+          productName: value.productName
         } 
       });
       if (existingProduct) {
-        return next(createError(400, 'Product name already exists for this agency'));
+        return next(createError(400, 'Product name already exists'));
       }
     }
 
@@ -312,13 +394,8 @@ const deleteProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Build where clause for finding product
-    const whereClause = { id };
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      whereClause.agencyId = req.user.agencyId;
-    }
-
-    const product = await Product.findOne({ where: whereClause });
+    // Note: Products are no longer associated with agencies directly
+    const product = await Product.findOne({ where: { id } });
     if (!product) {
       return next(createError(404, 'Product not found'));
     }
@@ -347,13 +424,8 @@ const updateProductStatus = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    // Build where clause for finding product
-    const whereClause = { id };
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      whereClause.agencyId = req.user.agencyId;
-    }
-
-    const product = await Product.findOne({ where: whereClause });
+    // Note: Products are no longer associated with agencies directly
+    const product = await Product.findOne({ where: { id } });
     if (!product) {
       return next(createError(404, 'Product not found'));
     }
@@ -377,33 +449,84 @@ const updateProductStatus = async (req, res, next) => {
 const getProductById = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { includeInventory, agencyId } = req.query;
     
     // Build where clause for finding product
     const whereClause = { id };
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      whereClause.agencyId = req.user.agencyId;
+    
+    // Note: Products are no longer directly associated with agencies
+    // Agency filtering is now handled through AgencyInventory
+    
+    // Build include options based on whether inventory data is requested or agencyId is provided
+    const includeOptions = [];
+    
+    if (includeInventory === 'true' || agencyId) {
+      includeOptions.push({
+        model: AgencyInventory,
+        as: 'AgencyInventory',
+        include: [
+          {
+            model: Agency,
+            as: 'Agency',
+            attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
+          }
+        ],
+        required: false
+      });
     }
     
     const product = await Product.findOne({ 
       where: whereClause,
-      include: [
-        {
-          model: require('../models').Agency,
-          as: 'Agency',
-          attributes: ['id', 'name', 'email', 'phone', 'city', 'status'],
-          required: false
-        }
-      ]
+      include: includeOptions
     });
     
     if (!product) {
       return next(createError(404, 'Product not found'));
     }
 
+    // Transform product to show agency-specific variants when agencyId is provided
+    const productData = product.toJSON();
+    
+    // If agencyId is provided and product has agency inventory, show agency-specific variants
+    if (agencyId && productData.AgencyInventory && productData.AgencyInventory.length > 0) {
+      const agencyInventory = productData.AgencyInventory.find(inv => inv.agencyId === agencyId);
+      if (agencyInventory && agencyInventory.agencyVariants && agencyInventory.agencyVariants.length > 0) {
+        // Replace global variants with agency-specific variants
+        productData.variants = agencyInventory.agencyVariants;
+        productData.agencyPrice = agencyInventory.agencyPrice;
+        productData.agencyStock = agencyInventory.stock;
+        productData.agencyLowStockThreshold = agencyInventory.lowStockThreshold;
+        productData.agencyIsActive = agencyInventory.isActive;
+      }
+      
+      // Filter AgencyInventory to only show the requested agency's data
+      productData.AgencyInventory = productData.AgencyInventory.filter(inv => inv.agencyId === agencyId);
+    }
+
+    // Check status filtering for customers
+    if (agencyId && req.user && req.user.role === 'customer') {
+      // First check if product has agency inventory
+      if (productData.AgencyInventory && productData.AgencyInventory.length > 0) {
+        const agencyInventory = productData.AgencyInventory.find(inv => inv.agencyId === agencyId);
+        if (agencyInventory) {
+          // Agency status is priority - if agency says inactive, hide it
+          if (agencyInventory.isActive !== true) {
+            return next(createError(404, 'Product not found or not available'));
+          }
+        } else {
+          // If no agency inventory found for this agency, don't show the product
+          return next(createError(404, 'Product not found or not available'));
+        }
+      } else {
+        // If no agency inventory found, don't show the product
+        return next(createError(404, 'Product not found or not available'));
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: 'Product retrieved successfully',
-      data: { product }
+      data: { product: productData }
     });
   } catch (error) {
     next(error);
@@ -414,6 +537,7 @@ const getProductById = async (req, res, next) => {
 const getProductsByStatus = async (req, res, next) => {
   try {
     const { status } = req.params;
+    const { includeInventory, agencyId } = req.query;
 
     if (!['active', 'inactive'].includes(status)) {
       return next(createError(400, 'Invalid status. Must be active or inactive'));
@@ -421,27 +545,83 @@ const getProductsByStatus = async (req, res, next) => {
 
     // Build where clause
     const whereClause = { status };
-    if (req.user && req.user.role === 'agency_owner' && req.user.agencyId) {
-      whereClause.agencyId = req.user.agencyId;
+    
+    // Note: Products are no longer directly associated with agencies
+    // Agency filtering is now handled through AgencyInventory
+
+    // Build include options based on whether inventory data is requested or agencyId is provided
+    const includeOptions = [];
+    
+    if (includeInventory === 'true' || agencyId) {
+      includeOptions.push({
+        model: AgencyInventory,
+        as: 'AgencyInventory',
+        include: [
+          {
+            model: Agency,
+            as: 'Agency',
+            attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
+          }
+        ],
+        required: false
+      });
     }
 
     const products = await Product.findAll({
       where: whereClause,
-      include: [
-        {
-          model: require('../models').Agency,
-          as: 'Agency',
-          attributes: ['id', 'name', 'email', 'phone', 'city', 'status'],
-          required: false
-        }
-      ],
+      include: includeOptions,
       order: [['createdAt', 'DESC']]
     });
+
+    // Transform products to show agency-specific variants when agencyId is provided
+    let transformedProducts = products.map(product => {
+      const productData = product.toJSON();
+      
+      // If agencyId is provided and product has agency inventory, show agency-specific variants
+      if (agencyId && productData.AgencyInventory && productData.AgencyInventory.length > 0) {
+        const agencyInventory = productData.AgencyInventory.find(inv => inv.agencyId === agencyId);
+        if (agencyInventory && agencyInventory.agencyVariants && agencyInventory.agencyVariants.length > 0) {
+          // Replace global variants with agency-specific variants
+          productData.variants = agencyInventory.agencyVariants;
+          productData.agencyPrice = agencyInventory.agencyPrice;
+          productData.agencyStock = agencyInventory.stock;
+          productData.agencyLowStockThreshold = agencyInventory.lowStockThreshold;
+          productData.agencyIsActive = agencyInventory.isActive;
+        }
+        
+        // Filter AgencyInventory to only show the requested agency's data
+        productData.AgencyInventory = productData.AgencyInventory.filter(inv => inv.agencyId === agencyId);
+      }
+      
+      return productData;
+    });
+
+    // Filter products based on status for customers
+    // If agencyId is provided (customer view), apply status filtering
+    if (agencyId && req.user && req.user.role === 'customer') {
+      transformedProducts = transformedProducts.filter(product => {
+        // First check if product has agency inventory
+        if (product.AgencyInventory && product.AgencyInventory.length > 0) {
+          const agencyInventory = product.AgencyInventory.find(inv => inv.agencyId === agencyId);
+          if (agencyInventory) {
+            // Agency status is priority - if agency says active, show it
+            if (agencyInventory.isActive === true) {
+              return true; // Show product regardless of admin status
+            } else {
+              return false; // Hide product if agency says inactive
+            }
+          }
+        }
+        
+        // If no agency inventory found, don't show the product
+        return false;
+      });
+    }
 
     res.status(200).json({
       success: true,
       message: `${status} products retrieved successfully`,
-      data: { products }
+      data: { products: transformedProducts }
     });
   } catch (error) {
     next(error);
@@ -450,6 +630,301 @@ const getProductsByStatus = async (req, res, next) => {
 
 
 
+// ========== AGENCY INVENTORY MANAGEMENT ==========
+
+// Add product to agency inventory
+const addProductToAgency = async (req, res, next) => {
+  try {
+    const { productId, agencyId } = req.params;
+
+    // Check if user has permission (admin or agency owner)
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'agency_owner')) {
+      return next(createError(403, 'Only admin or agency owner can manage inventory'));
+    }
+
+    // If agency owner, ensure they can only manage their own agency
+    if (req.user.role === 'agency_owner' && req.user.agencyId !== agencyId) {
+      return next(createError(403, 'You can only manage your own agency inventory'));
+    }
+
+    // Validate request body
+    const { error, value } = agencyInventorySchema.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    // Check if product exists
+    const product = await Product.findOne({ where: { id: productId } });
+    if (!product) {
+      return next(createError(404, 'Product not found'));
+    }
+
+    // Check if agency exists
+    const agency = await Agency.findOne({ where: { id: agencyId } });
+    if (!agency) {
+      return next(createError(404, 'Agency not found'));
+    }
+
+    // Check if inventory already exists
+    const existingInventory = await AgencyInventory.findOne({
+      where: { productId: productId, agencyId: agencyId }
+    });
+
+    if (existingInventory) {
+      return next(createError(400, 'Product already exists in agency inventory'));
+    }
+
+    // Create agency inventory
+    const inventory = await AgencyInventory.create({
+      productId: productId,
+      agencyId: agencyId,
+      ...value
+    });
+
+    logger.info(`Product added to agency inventory: ${product.productName} -> ${agency.name}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Product added to agency inventory successfully',
+      data: { inventory }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update agency inventory
+const updateAgencyInventory = async (req, res, next) => {
+  try {
+    const { productId, agencyId } = req.params;
+
+    // Check if user has permission (admin or agency owner)
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'agency_owner')) {
+      return next(createError(403, 'Only admin or agency owner can manage inventory'));
+    }
+
+    // If agency owner, ensure they can only manage their own agency
+    if (req.user.role === 'agency_owner' && req.user.agencyId !== agencyId) {
+      return next(createError(403, 'You can only manage your own agency inventory'));
+    }
+
+    // Validate request body
+    const { error, value } = agencyInventorySchema.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    // Find inventory
+    const inventory = await AgencyInventory.findOne({
+      where: { productId: productId, agencyId: agencyId },
+      include: [
+        { model: Product, as: 'Product' },
+        { model: Agency, as: 'Agency' }
+      ]
+    });
+
+    if (!inventory) {
+      return next(createError(404, 'Inventory not found'));
+    }
+
+    // Update inventory
+    await inventory.update(value);
+
+    logger.info(`Agency inventory updated: ${inventory.Product.productName} -> ${inventory.Agency.name}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Agency inventory updated successfully',
+      data: { inventory }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Remove product from agency inventory
+const removeProductFromAgency = async (req, res, next) => {
+  try {
+    const { productId, agencyId } = req.params;
+
+    // Check if user has permission (admin or agency owner)
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'agency_owner')) {
+      return next(createError(403, 'Only admin or agency owner can manage inventory'));
+    }
+
+    // If agency owner, ensure they can only manage their own agency
+    if (req.user.role === 'agency_owner' && req.user.agencyId !== agencyId) {
+      return next(createError(403, 'You can only manage your own agency inventory'));
+    }
+
+    // Find inventory
+    const inventory = await AgencyInventory.findOne({
+      where: { productId: productId, agencyId: agencyId },
+      include: [
+        { model: Product, as: 'Product' },
+        { model: Agency, as: 'Agency' }
+      ]
+    });
+
+    if (!inventory) {
+      return next(createError(404, 'Inventory not found'));
+    }
+
+    await inventory.destroy();
+
+    logger.info(`Product removed from agency inventory: ${inventory.Product.productName} -> ${inventory.Agency.name}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Product removed from agency inventory successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get agency inventory
+const getAgencyInventory = async (req, res, next) => {
+  try {
+    const { agencyId } = req.params;
+    const { page = 1, limit = 10, search, lowStock } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Check if user has permission (admin or agency owner)
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'agency_owner')) {
+      return next(createError(403, 'Only admin or agency owner can view inventory'));
+    }
+
+    // If agency owner, ensure they can only view their own agency
+    if (req.user.role === 'agency_owner' && req.user.agencyId !== agencyId) {
+      return next(createError(403, 'You can only view your own agency inventory'));
+    }
+
+    // Build where clause
+    const whereClause = { agencyId: agencyId };
+    
+    if (lowStock === 'true') {
+      whereClause[Op.and] = [
+        Sequelize.where(
+          Sequelize.col('stock'),
+          { [Op.lte]: Sequelize.col('lowStockThreshold') }
+        )
+      ];
+    }
+
+    // Build include options
+    const includeOptions = [
+      {
+        model: Product,
+        as: 'Product',
+        where: search ? {
+          [Op.or]: [
+            { productName: { [Op.iLike]: `%${search}%` } },
+            { description: { [Op.iLike]: `%${search}%` } }
+          ]
+        } : undefined,
+        required: true
+      }
+    ];
+
+    const inventory = await AgencyInventory.findAndCountAll({
+      where: whereClause,
+      include: includeOptions,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [['createdAt', 'DESC']]
+    });
+
+    const totalPages = Math.ceil(inventory.count / limit);
+
+    res.status(200).json({
+      success: true,
+      message: 'Agency inventory retrieved successfully',
+      data: {
+        inventory: inventory.rows,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalItems: inventory.count,
+          itemsPerPage: parseInt(limit)
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get all agency inventory (Admin only)
+const getAllAgencyInventory = async (req, res, next) => {
+  try {
+    // Only admin can view all agency inventory
+    if (!req.user || req.user.role !== 'admin') {
+      return next(createError(403, 'Only admin can view all agency inventory'));
+    }
+
+    const { page = 1, limit = 10, agencyId, productId, lowStock } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Build where clause
+    const whereClause = {};
+    
+    if (agencyId) {
+      whereClause.agencyId = agencyId;
+    }
+    
+    if (productId) {
+      whereClause.productId = productId;
+    }
+    
+    if (lowStock === 'true') {
+      whereClause[Op.and] = [
+        Sequelize.where(
+          Sequelize.col('stock'),
+          { [Op.lte]: Sequelize.col('lowStockThreshold') }
+        )
+      ];
+    }
+
+    const inventory = await AgencyInventory.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Product,
+          as: 'Product',
+          attributes: ['id', 'productName', 'description', 'category', 'status']
+        },
+        {
+          model: Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
+        }
+      ],
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [['createdAt', 'DESC']]
+    });
+
+    const totalPages = Math.ceil(inventory.count / limit);
+
+    res.status(200).json({
+      success: true,
+      message: 'All agency inventory retrieved successfully',
+      data: {
+        inventory: inventory.rows,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalItems: inventory.count,
+          itemsPerPage: parseInt(limit)
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createProductHandler,
   getAllProducts,
@@ -457,5 +932,10 @@ module.exports = {
   updateProductHandler,
   deleteProduct,
   updateProductStatus,
-  getProductsByStatus
+  getProductsByStatus,
+  addProductToAgency,
+  updateAgencyInventory,
+  removeProductFromAgency,
+  getAgencyInventory,
+  getAllAgencyInventory
 };

@@ -35,14 +35,7 @@ const Product = sequelize.define('Product', {
       min: 0
     }
   },
-  stock: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-    defaultValue: 0,
-    validate: {
-      min: 0
-    }
-  },
+  // Removed stock - agencies will manage their own stock
   lowStockThreshold: {
     type: DataTypes.INTEGER,
     allowNull: false,
@@ -71,21 +64,9 @@ const Product = sequelize.define('Product', {
     type: DataTypes.ARRAY(DataTypes.TEXT),
     allowNull: true,
     defaultValue: []
-  },
-  agencyId: {
-    type: DataTypes.UUID,
-    allowNull: false,
-    references: {
-      model: 'agencies',
-      key: 'id'
-    }
-  },
-  agencies: {
-    // Array of agency information: [{ name, email, phone, address, city, pincode }]
-    type: DataTypes.JSONB,
-    allowNull: true,
-    defaultValue: []
   }
+  // Removed agencyId - products are now admin-managed
+  // Removed agencies - agency inventory is now tracked separately
 }, {
   tableName: 'products',
   timestamps: true

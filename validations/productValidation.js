@@ -2,10 +2,40 @@ const Joi = require('joi');
 
 // Shared schemas
 const variantSchema = Joi.object({
-  label: Joi.string().min(1).max(50).required(),
+  label: Joi.alternatives().try(
+    Joi.string().min(1).max(50),
+    Joi.number(),
+    Joi.boolean()
+  ).optional(),
+  value: Joi.alternatives().try(
+    Joi.string().min(1).max(50),
+    Joi.number(),
+    Joi.boolean()
+  ).optional(),
   unit: Joi.string().min(1).max(20).optional(),
   price: Joi.number().positive().precision(2).required(),
   stock: Joi.number().integer().min(0).default(0)
+}).custom((value, helpers) => {
+  // Ensure either label or value is provided
+  if (!value.label && !value.value) {
+    return helpers.error('any.custom', { message: 'Either label or value is required' });
+  }
+  
+  // Convert both label and value to strings for consistency
+  if (value.label !== undefined) {
+    value.label = String(value.label);
+  }
+  if (value.value !== undefined) {
+    value.value = String(value.value);
+  }
+  
+  // If both are provided, use label as primary
+  if (value.label && value.value) {
+    value.label = value.label;
+  } else if (value.value && !value.label) {
+    value.label = value.value;
+  }
+  return value;
 });
 
 
@@ -29,11 +59,7 @@ const createProduct = Joi.object({
     'number.base': 'Price must be a valid number',
     'number.positive': 'Price must be positive',
   }),
-  stock: Joi.number().integer().min(0).optional().messages({
-    'number.base': 'Stock must be a valid number',
-    'number.integer': 'Stock must be a whole number',
-    'number.min': 'Stock cannot be negative'
-  }),
+  // Removed stock - agencies will manage their own stock
   lowStockThreshold: Joi.number().integer().min(0).default(10).messages({
     'number.base': 'Low stock threshold must be a valid number',
     'number.integer': 'Low stock threshold must be a whole number',
@@ -49,10 +75,8 @@ const createProduct = Joi.object({
     'array.base': 'Variants must be an array',
     'array.min': 'At least one variant is required'
   }),
-  images: Joi.array().items(Joi.string().min(1)).optional(),
-  agencyId: Joi.string().uuid().optional().messages({
-    'string.guid': 'Agency ID must be a valid UUID'
-  })
+  images: Joi.array().items(Joi.string().min(1)).optional()
+  // Removed agencyId - products are now admin-managed
 });
 
 // Validation for updating a product
@@ -73,11 +97,7 @@ const updateProduct = Joi.object({
     'number.base': 'Price must be a valid number',
     'number.positive': 'Price must be positive'
   }),
-  stock: Joi.number().integer().min(0).optional().messages({
-    'number.base': 'Stock must be a valid number',
-    'number.integer': 'Stock must be a whole number',
-    'number.min': 'Stock cannot be negative'
-  }),
+  // Removed stock - agencies will manage their own stock
   lowStockThreshold: Joi.number().integer().min(0).optional().messages({
     'number.base': 'Low stock threshold must be a valid number',
     'number.integer': 'Low stock threshold must be a whole number',
@@ -91,9 +111,9 @@ const updateProduct = Joi.object({
   }),
   variants: Joi.array().items(variantSchema).min(1).optional(),
   images: Joi.array().items(Joi.string().min(1)).optional(),
-  agencyId: Joi.string().uuid().optional().messages({
-    'string.guid': 'Agency ID must be a valid UUID'
-  })
+  imagesToDelete: Joi.array().items(Joi.string().min(1)).optional(),
+  existingImages: Joi.array().items(Joi.string().min(1)).optional()
+  // Removed agencyId - products are now admin-managed
 }).unknown(true);
 
 // Validation for updating status only
@@ -104,8 +124,33 @@ const updateStatus = Joi.object({
   })
 });
 
+// Validation for agency inventory management
+const agencyInventorySchema = Joi.object({
+  stock: Joi.number().integer().min(0).optional().messages({
+    'number.base': 'Stock must be a valid number',
+    'number.integer': 'Stock must be a whole number',
+    'number.min': 'Stock cannot be negative'
+  }),
+  lowStockThreshold: Joi.number().integer().min(0).optional().messages({
+    'number.base': 'Low stock threshold must be a valid number',
+    'number.integer': 'Low stock threshold must be a whole number',
+    'number.min': 'Low stock threshold cannot be negative'
+  }),
+  agencyPrice: Joi.number().positive().precision(2).optional().messages({
+    'number.base': 'Agency price must be a valid number',
+    'number.positive': 'Agency price must be positive'
+  }),
+  agencyVariants: Joi.array().items(variantSchema).optional().messages({
+    'array.base': 'Agency variants must be an array'
+  }),
+  isActive: Joi.boolean().optional().messages({
+    'boolean.base': 'isActive must be a boolean value'
+  })
+});
+
 module.exports = {
   createProduct,
   updateProduct,
-  updateStatus
+  updateStatus,
+  agencyInventorySchema
 };

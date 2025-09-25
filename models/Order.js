@@ -36,7 +36,13 @@ const Order = sequelize.define('Order', {
   },
   customerAddress: {
     type: DataTypes.TEXT,
-    allowNull: false
+    allowNull: true
+  },
+  // Delivery mode
+  deliveryMode: {
+    type: DataTypes.ENUM('home_delivery', 'pickup'),
+    allowNull: false,
+    defaultValue: 'home_delivery'
   },
   // Order details
   items: {
@@ -60,8 +66,11 @@ const Order = sequelize.define('Order', {
   },
   // Payment details
   paymentMethod: {
-    type: DataTypes.ENUM('cash_on_delivery'),
-    defaultValue: 'cash_on_delivery'
+    type: DataTypes.STRING,
+    allowNull: false,
+    validate: {
+      notEmpty: true
+    }
   },
   paymentStatus: {
     type: DataTypes.ENUM('pending', 'paid', 'failed'),
@@ -69,7 +78,7 @@ const Order = sequelize.define('Order', {
   },
   // Order status
   status: {
-    type: DataTypes.ENUM('pending', 'confirmed', 'assigned', 'out_for_delivery', 'delivered', 'cancelled'),
+    type: DataTypes.ENUM('pending', 'confirmed', 'assigned', 'out_for_delivery', 'delivered', 'cancelled', 'returned'),
     defaultValue: 'pending'
   },
   // Agency assignment
@@ -123,6 +132,45 @@ const Order = sequelize.define('Order', {
     type: DataTypes.DATE,
     allowNull: true
   },
+  // Track who cancelled the order
+  cancelledBy: {
+    type: DataTypes.ENUM('customer', 'admin', 'agency', 'system'),
+    allowNull: true
+  },
+  cancelledById: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    comment: 'ID of the user who cancelled the order'
+  },
+  cancelledByName: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Name of the user who cancelled the order'
+  },
+  // Return tracking
+  returnedAt: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  returnedBy: {
+    type: DataTypes.ENUM('customer', 'admin', 'agency', 'system'),
+    allowNull: true
+  },
+  returnedById: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    comment: 'ID of the user who returned the order'
+  },
+  returnedByName: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Name of the user who returned the order'
+  },
+  returnReason: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: 'Reason for returning the order'
+  },
   // Notes
   adminNotes: {
     type: DataTypes.TEXT,
@@ -131,6 +179,22 @@ const Order = sequelize.define('Order', {
   agentNotes: {
     type: DataTypes.TEXT,
     allowNull: true
+  },
+  // Delivery proof and notes
+  deliveryProofImage: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Cloudinary URL of delivery proof image'
+  },
+  deliveryNote: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    comment: 'Delivery note from agent'
+  },
+  paymentReceived: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: 'Whether payment was received by agent'
   }
 }, {
   tableName: 'orders',

@@ -49,18 +49,32 @@ const createOrder = Joi.object({
     'string.pattern.base': 'Phone number must be 10-15 digits',
     'any.required': 'Customer phone is required'
   }),
-  customerAddress: Joi.string().min(10).max(500).required().messages({
-    'string.min': 'Address must be at least 10 characters',
-    'string.max': 'Address cannot exceed 500 characters',
-    'any.required': 'Customer address is required'
+  customerAddress: Joi.string().min(10).max(500).when('deliveryMode', {
+    is: 'home_delivery',
+    then: Joi.required().messages({
+      'any.required': 'Customer address is required for home delivery'
+    }),
+    otherwise: Joi.optional().allow('').messages({
+      'string.min': 'Address must be at least 10 characters',
+      'string.max': 'Address cannot exceed 500 characters'
+    })
+  }),
+  deliveryMode: Joi.string().valid('home_delivery', 'pickup').required().messages({
+    'any.only': 'Delivery mode must be either home_delivery or pickup',
+    'any.required': 'Delivery mode is required'
+  }),
+  agencyId: Joi.string().uuid().required().messages({
+    'string.guid': 'Agency ID must be a valid UUID',
+    'any.required': 'Agency ID is required'
   }),
   items: Joi.array().items(orderItemSchema).min(1).required().messages({
     'array.base': 'Items must be an array',
     'array.min': 'At least one item is required',
     'any.required': 'Items are required'
   }),
-  paymentMethod: Joi.string().valid('cash_on_delivery').default('cash_on_delivery').messages({
-    'any.only': 'Payment method must be cash on delivery'
+  paymentMethod: Joi.string().min(1).required().messages({
+    'string.min': 'Payment method cannot be empty',
+    'any.required': 'Payment method is required'
   })
 });
 
@@ -103,6 +117,12 @@ const verifyOTP = Joi.object({
   otp: Joi.string().pattern(/^[0-9]{6}$/).required().messages({
     'string.pattern.base': 'OTP must be 6 digits',
     'any.required': 'OTP is required'
+  }),
+  deliveryNote: Joi.string().max(1000).optional().messages({
+    'string.max': 'Delivery note cannot exceed 1000 characters'
+  }),
+  paymentReceived: Joi.boolean().optional().messages({
+    'boolean.base': 'Payment received must be a boolean value'
   })
 });
 
@@ -115,12 +135,25 @@ const cancelOrder = Joi.object({
   })
 });
 
+// Return order validation
+const returnOrder = Joi.object({
+  reason: Joi.string().min(5).max(500).required().messages({
+    'string.min': 'Return reason must be at least 5 characters',
+    'string.max': 'Return reason cannot exceed 500 characters',
+    'any.required': 'Return reason is required'
+  }),
+  adminNotes: Joi.string().max(1000).optional().messages({
+    'string.max': 'Admin notes cannot exceed 1000 characters'
+  })
+});
+
 module.exports = {
   createOrder,
   updateOrderStatus,
   assignAgent,
   sendOTP,
   verifyOTP,
-  cancelOrder
+  cancelOrder,
+  returnOrder
 };
 

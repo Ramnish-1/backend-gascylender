@@ -7,11 +7,13 @@ const upload = require('../middleware/upload');
 // All routes require authentication
 router.use(authenticate);
 
-// Create a new product (supports multiple images via form-data field "images")
+// ========== PRODUCT MANAGEMENT (Admin Only) ==========
+
+// Create a new product (Admin only - supports multiple images via form-data field "images")
 router.post('/', upload.array('images', 10), productController.createProductHandler);
 
 // Get all products (comprehensive endpoint)
-// Supports: pagination, search, status filter, and getting by ID
+// Supports: pagination, search, status filter, agencyId filter, includeInventory
 router.get('/', productController.getAllProducts);
 
 
@@ -22,13 +24,30 @@ router.get('/status/:status', productController.getProductsByStatus);
 // Get a single product by ID (MUST come last among GET routes)
 router.get('/:id', productController.getProductById);
 
-// Update product (supports multiple images via form-data field "images")
+// Update product (Admin only - supports multiple images via form-data field "images")
 router.put('/:id', upload.array('images', 10), productController.updateProductHandler);
 
-// Update product status only
+// Update product status only (Admin only)
 router.patch('/:id/status', productController.updateProductStatus);
 
-// Delete product
+// Delete product (Admin only)
 router.delete('/:id', productController.deleteProduct);
+
+// ========== AGENCY INVENTORY MANAGEMENT ==========
+
+// Get all agency inventory (Admin only)
+router.get('/inventory/all', productController.getAllAgencyInventory);
+
+// Get agency inventory
+router.get('/inventory/agency/:agencyId', productController.getAgencyInventory);
+
+// Add product to agency inventory
+router.post('/:productId/inventory/agency/:agencyId', productController.addProductToAgency);
+
+// Update agency inventory
+router.put('/:productId/inventory/agency/:agencyId', productController.updateAgencyInventory);
+
+// Remove product from agency inventory
+router.delete('/:productId/inventory/agency/:agencyId', productController.removeProductFromAgency);
 
 module.exports = router;

@@ -1,5 +1,5 @@
 const { Order, DeliveryAgent, Product } = require('../models');
-const { createOrder, updateOrderStatus, assignAgent, sendOTP, verifyOTP, cancelOrder } = require('../validations/orderValidation');
+const { createOrder, updateOrderStatus, assignAgent, sendOTP, verifyOTP, cancelOrder, returnOrder } = require('../validations/orderValidation');
 const { createError } = require('../utils/errorHandler');
 const { sendEmail } = require('../config/email');
 const { 
@@ -44,32 +44,58 @@ const createOrderHandler = async (req, res, next) => {
     // Generate order number
     const orderNumber = generateOrderNumber();
 
-    // Determine agency from the first product in the order
-    // All products in an order should belong to the same agency
-    let agencyId = null;
+    // Use the specified agency from the request
+    const agencyId = value.agencyId;
+    
+    // Verify the agency exists and is active
+    const Agency = require('../models/Agency');
+    const agency = await Agency.findByPk(agencyId);
+    if (!agency) {
+      return next(createError(404, `Agency with ID ${agencyId} not found`));
+    }
+    if (agency.status !== 'active') {
+      return next(createError(400, `Agency ${agency.name} is not active`));
+    }
+      
+    // Verify all products are available in the specified agency
     if (value.items && value.items.length > 0) {
-      const firstProductId = value.items[0].productId;
-      const product = await Product.findByPk(firstProductId);
-      if (product) {
-        agencyId = product.agencyId;
+      const AgencyInventory = require('../models/AgencyInventory');
+      
+      for (const item of value.items) {
+        const product = await Product.findByPk(item.productId);
+        if (!product) {
+          return next(createError(404, `Product with ID ${item.productId} not found`));
+        }
         
-        // Verify all products belong to the same agency
-        for (const item of value.items) {
-          const product = await Product.findByPk(item.productId);
-          if (!product) {
-            return next(createError(404, `Product with ID ${item.productId} not found`));
+        const inventory = await AgencyInventory.findOne({
+          where: { 
+            productId: item.productId, 
+            agencyId: agencyId,
+            isActive: true 
           }
-          if (product.agencyId !== agencyId) {
-            return next(createError(400, 'All products in an order must belong to the same agency'));
+        });
+        
+        if (!inventory) {
+          return next(createError(400, `Product ${product.productName} is not available in the selected agency`));
+        }
+        
+        // Check stock availability - handle both product-level and variant-level stock
+        let availableStock = inventory.stock;
+        let stockMessage = `product ${product.productName}`;
+        
+        // If item has variant information, check variant-specific stock
+        if (item.variantLabel && inventory.agencyVariants && Array.isArray(inventory.agencyVariants)) {
+          const variant = inventory.agencyVariants.find(v => v.label === item.variantLabel);
+          if (variant) {
+            availableStock = variant.stock || 0;
+            stockMessage = `variant ${item.variantLabel} of ${product.productName}`;
           }
         }
-      } else {
-        return next(createError(404, `Product with ID ${firstProductId} not found`));
+        
+        if (availableStock < item.quantity) {
+          return next(createError(400, `Insufficient stock for ${stockMessage}. Available: ${availableStock}, Requested: ${item.quantity}`));
+        }
       }
-    }
-
-    if (!agencyId) {
-      return next(createError(400, 'Unable to determine agency for order'));
     }
 
     // Create order
@@ -78,7 +104,8 @@ const createOrderHandler = async (req, res, next) => {
       customerName: value.customerName,
       customerEmail: value.customerEmail,
       customerPhone: value.customerPhone,
-      customerAddress: value.customerAddress,
+      customerAddress: value.customerAddress || null,
+      deliveryMode: value.deliveryMode,
       items: value.items,
       subtotal: totals.subtotal,
       totalAmount: totals.totalAmount,
@@ -86,6 +113,46 @@ const createOrderHandler = async (req, res, next) => {
       status: 'pending',
       agencyId: agencyId
     });
+
+    // Reduce stock in agency inventory
+    const AgencyInventory = require('../models/AgencyInventory');
+    for (const item of value.items) {
+      // Get current inventory to check if we need to update variants
+      const inventory = await AgencyInventory.findOne({
+        where: {
+          productId: item.productId,
+          agencyId: agencyId
+        }
+      });
+      
+      if (inventory) {
+        // If item has variant information, update variant stock
+        if (item.variantLabel && inventory.agencyVariants && Array.isArray(inventory.agencyVariants)) {
+          const updatedVariants = inventory.agencyVariants.map(variant => {
+            if (variant.label === item.variantLabel) {
+              return {
+                ...variant,
+                stock: Math.max(0, (variant.stock || 0) - item.quantity)
+              };
+            }
+            return variant;
+          });
+          
+          await inventory.update({
+            agencyVariants: updatedVariants
+          });
+        } else {
+          // Update product-level stock
+          await AgencyInventory.decrement('stock', {
+            by: item.quantity,
+            where: {
+              productId: item.productId,
+              agencyId: agencyId
+            }
+          });
+        }
+      }
+    }
 
     logger.info(`Order created: ${order.orderNumber} for agency: ${agencyId}`);
 
@@ -113,7 +180,7 @@ const createOrderHandler = async (req, res, next) => {
 // Get all orders (Role-based filtering)
 const getAllOrders = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, status, search, id, agentId } = req.query;
+    const { page = 1, limit = 10, status, search, id, agentId, startDate, endDate } = req.query;
     const offset = (page - 1) * limit;
     const userRole = req.user.role;
     const userEmail = req.user.email;
@@ -133,6 +200,11 @@ const getAllOrders = async (req, res, next) => {
             model: DeliveryAgent,
             as: 'DeliveryAgent',
             attributes: ['id', 'name', 'phone', 'vehicleNumber']
+          },
+          {
+            model: require('../models').Agency,
+            as: 'Agency',
+            attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
           }
         ]
       });
@@ -179,19 +251,40 @@ const getAllOrders = async (req, res, next) => {
       ];
     }
 
+    // Date filtering
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) {
+        whereClause.createdAt[Op.gte] = new Date(startDate);
+      }
+      if (endDate) {
+        // Add 23:59:59 to endDate to include the entire day
+        const endDateTime = new Date(endDate);
+        endDateTime.setHours(23, 59, 59, 999);
+        whereClause.createdAt[Op.lte] = endDateTime;
+      }
+    }
+
     // Role-based filtering
     if (userRole === 'customer') {
       // Customer can only see their own orders
       whereClause.customerEmail = userEmail;
       console.log('👤 Customer filtering by email:', userEmail);
     } else if (userRole === 'agent') {
-      // Agent can only see orders assigned to them with status 'assigned'
+      // Agent can see orders assigned to them
       if (!req.user.deliveryAgentId) {
         return next(createError(400, 'Agent profile not properly linked. Please contact admin.'));
       }
       whereClause.assignedAgentId = req.user.deliveryAgentId;
-      whereClause.status = 'assigned'; // Only show assigned orders to agents
-      console.log('🚚 Agent filtering by assignedAgentId:', req.user.deliveryAgentId, 'and status: assigned');
+      
+      // If no specific status is requested, show active orders (assigned + out_for_delivery)
+      // If specific status is requested, respect that filter
+      if (!status) {
+        whereClause.status = { [Op.in]: ['assigned', 'out_for_delivery'] };
+        console.log('🚚 Agent filtering by assignedAgentId:', req.user.deliveryAgentId, 'and status: assigned, out_for_delivery (default)');
+      } else {
+        console.log('🚚 Agent filtering by assignedAgentId:', req.user.deliveryAgentId, 'and specific status:', status);
+      }
     } else if (userRole === 'agency_owner') {
       // Agency owner can only see orders for their agency
       if (!req.user.agencyId) {
@@ -281,6 +374,35 @@ const updateOrderStatusHandler = async (req, res, next) => {
       updateData.deliveredAt = new Date();
     } else if (value.status === 'cancelled' && order.status !== 'delivered') {
       updateData.cancelledAt = new Date();
+      
+      // Track who cancelled the order
+      let cancelledBy = 'system';
+      let cancelledById = null;
+      let cancelledByName = 'System';
+
+      if (req.user) {
+        switch (req.user.role) {
+          case 'admin':
+            cancelledBy = 'admin';
+            cancelledById = req.user.id;
+            cancelledByName = req.user.name || req.user.email;
+            break;
+          case 'agency':
+            cancelledBy = 'agency';
+            cancelledById = req.user.id;
+            cancelledByName = req.user.name || req.user.email;
+            break;
+          case 'customer':
+            cancelledBy = 'customer';
+            cancelledById = req.user.id;
+            cancelledByName = req.user.name || req.user.email;
+            break;
+        }
+      }
+      
+      updateData.cancelledBy = cancelledBy;
+      updateData.cancelledById = cancelledById;
+      updateData.cancelledByName = cancelledByName;
     }
 
     if (value.adminNotes) updateData.adminNotes = value.adminNotes;
@@ -288,7 +410,13 @@ const updateOrderStatusHandler = async (req, res, next) => {
 
     await order.update(updateData);
 
-    logger.info(`Order status updated: ${order.orderNumber} - ${value.status}`);
+    if (value.status === 'cancelled') {
+      const cancelledByName = updateData.cancelledByName || 'System';
+      const cancelledBy = updateData.cancelledBy || 'system';
+      logger.info(`Order cancelled: ${order.orderNumber} by ${cancelledByName} (${cancelledBy})`);
+    } else {
+      logger.info(`Order status updated: ${order.orderNumber} - ${value.status}`);
+    }
 
     // Send email notification
     if (value.status === 'confirmed') {
@@ -462,15 +590,33 @@ const verifyOTPHandler = async (req, res, next) => {
       return next(createError(400, 'Invalid or expired OTP'));
     }
 
-    // Update order
-    await order.update({
+    // Prepare update data
+    const updateData = {
       status: 'delivered',
       deliveredAt: new Date(),
       deliveryOTP: null,
       otpExpiresAt: null
-    });
+    };
 
-    logger.info(`Order delivered: ${order.orderNumber}`);
+    // Add delivery note if provided
+    if (value.deliveryNote) {
+      updateData.deliveryNote = value.deliveryNote;
+    }
+
+    // Add payment received status if provided
+    if (value.paymentReceived !== undefined) {
+      updateData.paymentReceived = value.paymentReceived;
+    }
+
+    // Add delivery proof image if uploaded
+    if (req.file && req.file.path) {
+      updateData.deliveryProofImage = req.file.path;
+    }
+
+    // Update order
+    await order.update(updateData);
+
+    logger.info(`Order delivered: ${order.orderNumber} with delivery proof: ${req.file ? 'Yes' : 'No'}`);
 
     // Send email notification
     await sendEmail(order.customerEmail, 'orderDelivered', formatOrderResponse(order));
@@ -478,14 +624,22 @@ const verifyOTPHandler = async (req, res, next) => {
     // Emit socket notification
     emitNotification(NOTIFICATION_TYPES.ORDER_DELIVERED, {
       orderId: order.id,
-      orderNumber: order.orderNumber
+      orderNumber: order.orderNumber,
+      deliveryProof: req.file ? true : false,
+      paymentReceived: value.paymentReceived || false
     });
 
     res.status(200).json({
       success: true,
       message: 'Order delivered successfully',
       data: {
-        order: formatOrderResponse(order)
+        order: formatOrderResponse(order),
+        deliveryProof: req.file ? {
+          url: req.file.path,
+          publicId: req.file.filename
+        } : null,
+        deliveryNote: value.deliveryNote || null,
+        paymentReceived: value.paymentReceived || false
       }
     });
   } catch (error) {
@@ -513,14 +667,42 @@ const cancelOrderHandler = async (req, res, next) => {
       return next(createError(400, 'Cannot cancel delivered order'));
     }
 
+    // Determine who cancelled the order
+    let cancelledBy = 'system';
+    let cancelledById = null;
+    let cancelledByName = 'System';
+
+    if (req.user) {
+      switch (req.user.role) {
+        case 'admin':
+          cancelledBy = 'admin';
+          cancelledById = req.user.id;
+          cancelledByName = req.user.name || req.user.email;
+          break;
+        case 'agency':
+          cancelledBy = 'agency';
+          cancelledById = req.user.id;
+          cancelledByName = req.user.name || req.user.email;
+          break;
+        case 'customer':
+          cancelledBy = 'customer';
+          cancelledById = req.user.id;
+          cancelledByName = req.user.name || req.user.email;
+          break;
+      }
+    }
+
     // Update order
     await order.update({
       status: 'cancelled',
       cancelledAt: new Date(),
+      cancelledBy: cancelledBy,
+      cancelledById: cancelledById,
+      cancelledByName: cancelledByName,
       adminNotes: value.reason
     });
 
-    logger.info(`Order cancelled: ${order.orderNumber}`);
+    logger.info(`Order cancelled: ${order.orderNumber} by ${cancelledByName} (${cancelledBy})`);
 
     // Send email notification
     await sendEmail(order.customerEmail, 'orderCancelled', formatOrderResponse(order), value.reason);
@@ -536,7 +718,13 @@ const cancelOrderHandler = async (req, res, next) => {
       success: true,
       message: 'Order cancelled successfully',
       data: {
-        order: formatOrderResponse(order)
+        order: formatOrderResponse(order),
+        cancellationInfo: {
+          cancelledBy: cancelledBy,
+          cancelledByName: cancelledByName,
+          cancelledAt: new Date(),
+          reason: value.reason
+        }
       }
     });
   } catch (error) {
@@ -577,6 +765,11 @@ const getOrdersByStatus = async (req, res, next) => {
           model: DeliveryAgent,
           as: 'DeliveryAgent',
           attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        },
+        {
+          model: require('../models').Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
         }
       ],
       order: [['createdAt', 'DESC']]
@@ -707,6 +900,11 @@ const getAgentDeliveryHistory = async (req, res, next) => {
           model: DeliveryAgent,
           as: 'DeliveryAgent',
           attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        },
+        {
+          model: require('../models').Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
         }
       ],
       limit: parseInt(limit),
@@ -830,6 +1028,29 @@ const getAgentDeliveryStats = async (req, res, next) => {
       }
     });
 
+    // Get current active orders (assigned + out_for_delivery)
+    const assignedOrders = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'assigned'
+      }
+    });
+
+    const outForDeliveryOrders = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'out_for_delivery'
+      }
+    });
+
+    // Get total delivered orders (all time, not just period)
+    const totalDeliveredOrders = await Order.count({
+      where: {
+        assignedAgentId: req.user.deliveryAgentId,
+        status: 'delivered'
+      }
+    });
+
     // Get all delivered orders for the period with full details
     const deliveredOrders = await Order.findAll({
       where: {
@@ -842,6 +1063,11 @@ const getAgentDeliveryStats = async (req, res, next) => {
           model: DeliveryAgent,
           as: 'DeliveryAgent',
           attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        },
+        {
+          model: require('../models').Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
         }
       ],
       order: [['deliveredAt', 'DESC']]
@@ -859,6 +1085,11 @@ const getAgentDeliveryStats = async (req, res, next) => {
           model: DeliveryAgent,
           as: 'DeliveryAgent',
           attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        },
+        {
+          model: require('../models').Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
         }
       ],
       order: [['cancelledAt', 'DESC']]
@@ -896,10 +1127,19 @@ const getAgentDeliveryStats = async (req, res, next) => {
         periodStart: startDate,
         periodEnd: now,
         stats: {
-          delivered: deliveredThisPeriod,
-          cancelled: cancelledThisPeriod,
-          earnings: earningsThisPeriod || 0,
-          totalOrders: deliveredThisPeriod + cancelledThisPeriod
+          // Period-based stats
+          deliveredThisPeriod: deliveredThisPeriod,
+          cancelledThisPeriod: cancelledThisPeriod,
+          earningsThisPeriod: earningsThisPeriod || 0,
+          totalOrdersThisPeriod: deliveredThisPeriod + cancelledThisPeriod,
+          
+          // Current active orders
+          assignedOrders: assignedOrders,
+          outForDeliveryOrders: outForDeliveryOrders,
+          totalActiveOrders: assignedOrders + outForDeliveryOrders,
+          
+          // All-time stats
+          totalDeliveredOrders: totalDeliveredOrders
         },
         dailyBreakdown: dailyBreakdown,
         deliveredOrders: deliveredOrders.map(order => formatOrderResponse(order, true)),
@@ -911,15 +1151,171 @@ const getAgentDeliveryStats = async (req, res, next) => {
   }
 };
 
+const returnOrderHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // Validate request body
+    const { error, value } = returnOrder.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    const order = await Order.findByPk(id);
+    if (!order) {
+      return next(createError(404, 'Order not found'));
+    }
+
+    // Only delivered orders can be returned
+    if (order.status !== 'delivered') {
+      return next(createError(400, 'Only delivered orders can be returned'));
+    }
+
+    // Check permissions - customer can only return their own orders
+    if (req.user.role === 'customer' && order.customerEmail !== req.user.email) {
+      return next(createError(403, 'Access denied. You can only return your own orders'));
+    }
+
+    // Determine who returned the order
+    let returnedBy = 'system';
+    let returnedById = null;
+    let returnedByName = 'System';
+
+    if (req.user) {
+      switch (req.user.role) {
+        case 'admin':
+          returnedBy = 'admin';
+          returnedById = req.user.id;
+          returnedByName = req.user.name || req.user.email;
+          break;
+        case 'agency':
+          returnedBy = 'agency';
+          returnedById = req.user.id;
+          returnedByName = req.user.name || req.user.email;
+          break;
+        case 'customer':
+          returnedBy = 'customer';
+          returnedById = req.user.id;
+          returnedByName = req.user.name || req.user.email;
+          break;
+      }
+    }
+
+    // Update order
+    await order.update({
+      status: 'returned',
+      returnedAt: new Date(),
+      returnedBy: returnedBy,
+      returnedById: returnedById,
+      returnedByName: returnedByName,
+      returnReason: value.reason,
+      adminNotes: value.adminNotes || order.adminNotes
+    });
+
+    logger.info(`Order returned: ${order.orderNumber} by ${returnedByName} (${returnedBy})`);
+
+    // Send email notification
+    await sendEmail(order.customerEmail, 'orderReturned', formatOrderResponse(order), value.reason);
+
+    // Emit socket notification
+    emitNotification(NOTIFICATION_TYPES.ORDER_RETURNED, {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      reason: value.reason
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Order returned successfully',
+      data: {
+        order: formatOrderResponse(order),
+        returnInfo: {
+          returnedBy: returnedBy,
+          returnedByName: returnedByName,
+          returnedAt: new Date(),
+          reason: value.reason
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getOrderById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // Find the order with all related data
+    const order = await Order.findByPk(id, {
+      include: [
+        {
+          model: require('../models/Agency'),
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'city', 'status']
+        },
+        {
+          model: require('../models/DeliveryAgent'),
+          as: 'DeliveryAgent',
+          attributes: ['id', 'name', 'phone', 'vehicleNumber']
+        }
+      ]
+    });
+
+    if (!order) {
+      return next(createError(404, 'Order not found'));
+    }
+
+    // Check permissions based on user role
+    const userRole = req.user.role;
+    const userId = req.user.id;
+
+    // Admin can see all orders
+    if (userRole === 'admin') {
+      // No additional filtering needed
+    }
+    // Agency can only see their own orders
+    else if (userRole === 'agency') {
+      if (order.agencyId !== userId) {
+        return next(createError(403, 'Access denied. You can only view orders for your agency'));
+      }
+    }
+    // Customer can only see their own orders
+    else if (userRole === 'customer') {
+      if (order.customerEmail !== req.user.email) {
+        return next(createError(403, 'Access denied. You can only view your own orders'));
+      }
+    }
+    // Delivery agent can only see orders assigned to them
+    else if (userRole === 'delivery_agent') {
+      if (order.assignedAgentId !== req.user.deliveryAgentId) {
+        return next(createError(403, 'Access denied. You can only view orders assigned to you'));
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        order: formatOrderResponse(order, true) // Include agent information
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   setSocketInstance,
   createOrderHandler,
   getAllOrders,
+  getOrderById,
   updateOrderStatusHandler,
   assignAgentHandler,
   sendOTPHandler,
   verifyOTPHandler,
   cancelOrderHandler,
+  returnOrderHandler,
   getOrdersByStatus,
   getCustomerOrdersSummary,
   getAgentDeliveryHistory,
