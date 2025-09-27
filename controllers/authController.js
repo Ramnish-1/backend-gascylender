@@ -233,6 +233,15 @@ const getProfile = async (req, res, next) => {
         const { Agency } = require('../models');
         const agency = await Agency.findByPk(agencyOwner.agencyId);
         
+        // If agency owner's profileImage is null but agency has profileImage,
+        // update the agency owner with the agency's image
+        let finalProfileImage = agencyOwner.profileImage;
+        if (!agencyOwner.profileImage && agency && agency.profileImage) {
+          // Update agency owner with agency's image
+          await agencyOwner.update({ profileImage: agency.profileImage });
+          finalProfileImage = agency.profileImage;
+        }
+        
         userData = {
           id: agencyOwner.id,
           email: agencyOwner.email,
@@ -242,7 +251,7 @@ const getProfile = async (req, res, next) => {
           agencyId: agencyOwner.agencyId,
           isEmailVerified: agencyOwner.isEmailVerified,
           lastLoginAt: agencyOwner.lastLoginAt,
-          profileImage: agencyOwner.profileImage,
+          profileImage: finalProfileImage,
           address: agencyOwner.address,
           city: agencyOwner.city,
           pincode: agencyOwner.pincode,
@@ -484,7 +493,7 @@ const updateProfile = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    const { name, phone, address, addresses } = value;
+    const { name, email, phone, address, addresses } = value;
     const userId = req.user.userId;
 
     // Check if user is in User table or AgencyOwner table
@@ -497,6 +506,7 @@ const updateProfile = async (req, res, next) => {
       // Update user data
       const updateData = {};
       if (name !== undefined) updateData.name = name;
+      if (email !== undefined) updateData.email = email;
       if (phone !== undefined) updateData.phone = phone;
       if (address !== undefined) updateData.address = address;
       if (addresses !== undefined) updateData.addresses = addresses;
@@ -518,6 +528,7 @@ const updateProfile = async (req, res, next) => {
         // Update agency owner data
         const updateData = {};
         if (name !== undefined) updateData.name = name;
+        if (email !== undefined) updateData.email = email;
         if (phone !== undefined) updateData.phone = phone;
         if (address !== undefined) updateData.address = address;
 
@@ -528,6 +539,16 @@ const updateProfile = async (req, res, next) => {
         }
 
         await agencyOwner.update(updateData);
+        
+        // If image was updated for agency owner, also update the agency's image
+        if (req.file) {
+          const { Agency } = require('../models');
+          await Agency.update(
+            { profileImage: req.file.path },
+            { where: { id: agencyOwner.agencyId } }
+          );
+        }
+        
         userData = agencyOwner.toPublicJSON();
       } else {
         return next(createError(404, 'User not found'));

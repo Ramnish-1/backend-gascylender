@@ -29,5 +29,6 @@ router.post('/:id/send-otp', orderController.sendOTPHandler);
 router.post('/:id/verify-otp', uploadDeliveryProof.single('deliveryProof'), orderController.verifyOTPHandler);
 router.put('/:id/cancel', orderController.cancelOrderHandler);
 router.put('/:id/return', orderController.returnOrderHandler);
+router.put('/:id/payment', orderController.markPaymentReceivedHandler);
 
 module.exports = router;

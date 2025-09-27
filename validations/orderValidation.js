@@ -147,6 +147,17 @@ const returnOrder = Joi.object({
   })
 });
 
+// Mark payment received validation (for pickup orders)
+const markPaymentReceived = Joi.object({
+  paymentReceived: Joi.boolean().required().messages({
+    'boolean.base': 'Payment received must be a boolean value (true or false)',
+    'any.required': 'Payment received status is required'
+  }),
+  notes: Joi.string().max(500).optional().messages({
+    'string.max': 'Notes cannot exceed 500 characters'
+  })
+});
+
 module.exports = {
   createOrder,
   updateOrderStatus,
@@ -154,6 +165,7 @@ module.exports = {
   sendOTP,
   verifyOTP,
   cancelOrder,
-  returnOrder
+  returnOrder,
+  markPaymentReceived
 };
 

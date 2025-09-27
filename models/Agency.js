@@ -61,6 +61,10 @@ const Agency = sequelize.define('Agency', {
     type: DataTypes.STRING,
     allowNull: true
   },
+  profileImage: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   status: {
     type: DataTypes.ENUM('inactive', 'active'),
     defaultValue: 'inactive'

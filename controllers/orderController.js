@@ -1,5 +1,5 @@
 const { Order, DeliveryAgent, Product } = require('../models');
-const { createOrder, updateOrderStatus, assignAgent, sendOTP, verifyOTP, cancelOrder, returnOrder } = require('../validations/orderValidation');
+const { createOrder, updateOrderStatus, assignAgent, sendOTP, verifyOTP, cancelOrder, returnOrder, markPaymentReceived } = require('../validations/orderValidation');
 const { createError } = require('../utils/errorHandler');
 const { sendEmail } = require('../config/email');
 const { 
@@ -8,6 +8,7 @@ const {
   calculateOrderTotals, 
   validateOTP, 
   formatOrderResponse,
+  restoreStockToAgency,
   NOTIFICATION_TYPES,
   createNotificationPayload
 } = require('../utils/orderUtils');
@@ -372,6 +373,10 @@ const updateOrderStatusHandler = async (req, res, next) => {
       updateData.outForDeliveryAt = new Date();
     } else if (value.status === 'delivered' && order.status === 'out_for_delivery') {
       updateData.deliveredAt = new Date();
+      // Auto-update payment status to "paid" if order is delivered and payment received
+      if (order.paymentReceived === true) {
+        updateData.paymentStatus = 'paid';
+      }
     } else if (value.status === 'cancelled' && order.status !== 'delivered') {
       updateData.cancelledAt = new Date();
       
@@ -410,10 +415,13 @@ const updateOrderStatusHandler = async (req, res, next) => {
 
     await order.update(updateData);
 
+    // Restore stock when order is cancelled via status update
     if (value.status === 'cancelled') {
+      await restoreStockToAgency(order);
+      
       const cancelledByName = updateData.cancelledByName || 'System';
       const cancelledBy = updateData.cancelledBy || 'system';
-      logger.info(`Order cancelled: ${order.orderNumber} by ${cancelledByName} (${cancelledBy})`);
+      logger.info(`Order cancelled: ${order.orderNumber} by ${cancelledByName} (${cancelledBy}) - Stock restored to agency inventory`);
     } else {
       logger.info(`Order status updated: ${order.orderNumber} - ${value.status}`);
     }
@@ -613,6 +621,11 @@ const verifyOTPHandler = async (req, res, next) => {
       updateData.deliveryProofImage = req.file.path;
     }
 
+    // Auto-update payment status to "paid" if order is delivered and payment received
+    if (value.paymentReceived === true) {
+      updateData.paymentStatus = 'paid';
+    }
+
     // Update order
     await order.update(updateData);
 
@@ -702,7 +715,10 @@ const cancelOrderHandler = async (req, res, next) => {
       adminNotes: value.reason
     });
 
-    logger.info(`Order cancelled: ${order.orderNumber} by ${cancelledByName} (${cancelledBy})`);
+    // Restore stock in agency inventory when order is cancelled
+    await restoreStockToAgency(order);
+
+    logger.info(`Order cancelled: ${order.orderNumber} by ${cancelledByName} (${cancelledBy}) - Stock restored to agency inventory`);
 
     // Send email notification
     await sendEmail(order.customerEmail, 'orderCancelled', formatOrderResponse(order), value.reason);
@@ -1212,7 +1228,10 @@ const returnOrderHandler = async (req, res, next) => {
       adminNotes: value.adminNotes || order.adminNotes
     });
 
-    logger.info(`Order returned: ${order.orderNumber} by ${returnedByName} (${returnedBy})`);
+    // Restore stock in agency inventory when order is returned
+    await restoreStockToAgency(order);
+
+    logger.info(`Order returned: ${order.orderNumber} by ${returnedByName} (${returnedBy}) - Stock restored to agency inventory`);
 
     // Send email notification
     await sendEmail(order.customerEmail, 'orderReturned', formatOrderResponse(order), value.reason);
@@ -1305,6 +1324,104 @@ const getOrderById = async (req, res, next) => {
   }
 };
 
+// Mark payment received for pickup orders (Admin/Agency Owner)
+const markPaymentReceivedHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // Validate request body
+    const { error, value } = markPaymentReceived.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    const order = await Order.findByPk(id);
+    if (!order) {
+      return next(createError(404, 'Order not found'));
+    }
+
+    // Check permissions
+    const userRole = req.user.role;
+    
+    // Only admin and agency owners can mark payment received
+    if (userRole !== 'admin' && userRole !== 'agency_owner') {
+      return next(createError(403, 'Access denied. Only admin and agency owners can mark payment received.'));
+    }
+
+    // Agency owners can only mark payment for their own agency's orders
+    if (userRole === 'agency_owner' && order.agencyId !== req.user.agencyId) {
+      return next(createError(403, 'Access denied. You can only mark payment for orders from your own agency.'));
+    }
+
+    // Only pickup orders can have payment marked as received
+    if (order.deliveryMode !== 'pickup') {
+      return next(createError(400, 'Payment can only be marked for pickup orders.'));
+    }
+
+    // For pickup orders, we can mark payment and automatically deliver the order
+    // Order should not be cancelled or already delivered
+    if (order.status === 'cancelled') {
+      return next(createError(400, 'Cannot mark payment for cancelled orders.'));
+    }
+    
+    if (order.status === 'returned') {
+      return next(createError(400, 'Cannot mark payment for returned orders.'));
+    }
+
+    // Update payment received status and automatically deliver the order
+    const updateData = {
+      paymentReceived: value.paymentReceived,
+      status: 'delivered',  // Automatically mark as delivered when payment is processed
+      deliveredAt: new Date()  // Set delivery timestamp
+    };
+
+    // If notes are provided, add them to admin notes
+    if (value.notes) {
+      const currentNotes = order.adminNotes || '';
+      const newNotes = currentNotes ? `${currentNotes}\n\nPayment Note: ${value.notes}` : `Payment Note: ${value.notes}`;
+      updateData.adminNotes = newNotes;
+    }
+
+    // If payment is received, also update payment status
+    if (value.paymentReceived === true) {
+      updateData.paymentStatus = 'paid';
+    }
+
+    await order.update(updateData);
+
+    logger.info(`Payment marked as ${value.paymentReceived ? 'received' : 'not received'} and order delivered: ${order.orderNumber} by ${req.user.name || req.user.email}`);
+
+    // Emit socket notification
+    emitNotification(NOTIFICATION_TYPES.PAYMENT_UPDATED, {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      paymentReceived: value.paymentReceived,
+      orderStatus: 'delivered',
+      deliveredAt: new Date(),
+      updatedBy: req.user.name || req.user.email
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Payment marked as ${value.paymentReceived ? 'received' : 'not received'} and order delivered successfully`,
+      data: {
+        order: formatOrderResponse(order),
+        paymentInfo: {
+          paymentReceived: value.paymentReceived,
+          paymentStatus: order.paymentStatus,
+          orderStatus: 'delivered',
+          deliveredAt: new Date(),
+          updatedBy: req.user.name || req.user.email,
+          updatedAt: new Date(),
+          notes: value.notes || null
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   setSocketInstance,
   createOrderHandler,
@@ -1316,6 +1433,7 @@ module.exports = {
   verifyOTPHandler,
   cancelOrderHandler,
   returnOrderHandler,
+  markPaymentReceivedHandler,
   getOrdersByStatus,
   getCustomerOrdersSummary,
   getAgentDeliveryHistory,

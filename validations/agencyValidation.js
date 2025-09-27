@@ -8,7 +8,8 @@ const createAgency = Joi.object({
   address: Joi.string().min(5).max(500).required(),
   city: Joi.string().min(2).max(50).required(),
   pincode: Joi.string().pattern(/^[0-9]{6}$/).required(),
-  landmark: Joi.string().max(100).optional().allow('')
+  landmark: Joi.string().max(100).optional().allow(''),
+  profileImage: Joi.string().uri().optional().allow('')
 });
 
 const updateAgency = Joi.object({
@@ -20,6 +21,7 @@ const updateAgency = Joi.object({
   city: Joi.string().min(2).max(50).optional(),
   pincode: Joi.string().pattern(/^[0-9]{6}$/).optional(),
   landmark: Joi.string().max(100).optional().allow(''),
+  profileImage: Joi.string().uri().optional().allow(''),
   status: Joi.string().valid('inactive', 'active').optional()
 });
 

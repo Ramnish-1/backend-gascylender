@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { AgencyInventory } = require('../models');
 
 // Generate unique order number
 const generateOrderNumber = () => {
@@ -118,7 +119,8 @@ const NOTIFICATION_TYPES = {
   ORDER_CANCELLED: 'order_cancelled',
   ORDER_RETURNED: 'order_returned',
   OTP_SENT: 'otp_sent',
-  OTP_VERIFIED: 'otp_verified'
+  OTP_VERIFIED: 'otp_verified',
+  PAYMENT_UPDATED: 'payment_updated'
 };
 
 // Create socket notification payload
@@ -130,12 +132,60 @@ const createNotificationPayload = (type, data) => {
   };
 };
 
+// Restore stock in agency inventory (for cancellations and returns)
+const restoreStockToAgency = async (order) => {
+  try {
+    for (const item of order.items) {
+      // Get current inventory to check if we need to update variants
+      const inventory = await AgencyInventory.findOne({
+        where: {
+          productId: item.productId,
+          agencyId: order.agencyId
+        }
+      });
+      
+      if (inventory) {
+        // If item has variant information, restore variant stock
+        if (item.variantLabel && inventory.agencyVariants && Array.isArray(inventory.agencyVariants)) {
+          const updatedVariants = inventory.agencyVariants.map(variant => {
+            if (variant.label === item.variantLabel) {
+              return {
+                ...variant,
+                stock: (variant.stock || 0) + item.quantity
+              };
+            }
+            return variant;
+          });
+          
+          await inventory.update({
+            agencyVariants: updatedVariants
+          });
+        } else {
+          // Restore product-level stock
+          await AgencyInventory.increment('stock', {
+            by: item.quantity,
+            where: {
+              productId: item.productId,
+              agencyId: order.agencyId
+            }
+          });
+        }
+      }
+    }
+    return true;
+  } catch (error) {
+    console.error('Error restoring stock:', error);
+    return false;
+  }
+};
+
 module.exports = {
   generateOrderNumber,
   generateOTP,
   calculateOrderTotals,
   validateOTP,
   formatOrderResponse,
+  restoreStockToAgency,
   NOTIFICATION_TYPES,
   createNotificationPayload
 };

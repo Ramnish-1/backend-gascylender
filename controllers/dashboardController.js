@@ -2,34 +2,58 @@ const { Op, fn, col, literal, Sequelize } = require('sequelize');
 const { User, DeliveryAgent, Agency, Product, Order } = require('../models');
 const { createError } = require('../utils/errorHandler');
 
-// Admin-only dashboard summary
+// Dashboard summary (Admin or Agency Owner)
 const getDashboard = async (req, res, next) => {
   try {
-    if (!req.user || req.user.role !== 'admin') {
-      return next(createError(403, 'Admins only'));
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'agency_owner')) {
+      return next(createError(403, 'Admins and Agency Owners only'));
     }
 
-    // Totals
-    const [totalUsers, totalAgents, totalAgencies, totalProducts, totalOrders] = await Promise.all([
-      User.count(),
-      DeliveryAgent.count(),
-      Agency.count(),
-      Product.count(),
-      Order.count()
-    ]);
+    const isAgencyOwner = req.user.role === 'agency_owner';
+    const agencyId = req.user.agencyId;
 
-    // Users breakdown
+    // Build filters based on user role
+    const commonFilters = isAgencyOwner ? { agencyId } : {};
+    const orderFilters = isAgencyOwner ? { agencyId } : {};
+
+    // Totals based on role
+    let [totalUsers, totalAgents, totalAgencies, totalProducts, totalOrders] = [null, null, null, null, null];
+    
+    if (isAgencyOwner) {
+      // Agency owner sees only their agency data
+      [totalUsers, totalAgents, totalAgencies, totalProducts, totalOrders] = await Promise.all([
+        User.count({ where: { role: 'customer' } }), // Total customers across all agencies for orders
+        DeliveryAgent.count({ where: { agencyId } }),
+        1, // Only their own agency
+        Product.count(),
+        Order.count({ where: orderFilters })
+      ]);
+    } else {
+      // Admin sees all data
+      [totalUsers, totalAgents, totalAgencies, totalProducts, totalOrders] = await Promise.all([
+        User.count({ where: { role: 'customer' } }),
+        DeliveryAgent.count(),
+        Agency.count(),
+        Product.count(),
+        Order.count()
+      ]);
+    }
+
+    // Users breakdown (same for both admin and agency owner)
     const [activeUsers, blockedUsers, registeredUsers] = await Promise.all([
-      User.count({ where: { isBlocked: false } }),
-      User.count({ where: { isBlocked: true } }),
-      User.count({ where: { registeredAt: { [Op.ne]: null } } })
+      User.count({ where: { role: 'customer', isBlocked: false } }),
+      User.count({ where: { role: 'customer', isBlocked: true } }),
+      User.count({ where: { role: 'customer', registeredAt: { [Op.ne]: null } } })
     ]);
 
     // Agencies breakdown
-    const [activeAgencies, inactiveAgencies] = await Promise.all([
-      Agency.count({ where: { status: 'active' } }),
-      Agency.count({ where: { status: 'inactive' } })
-    ]);
+    let [activeAgencies, inactiveAgencies] = [1, 0]; // Default values for agency owner
+    if (!isAgencyOwner) {
+      [activeAgencies, inactiveAgencies] = await Promise.all([
+        Agency.count({ where: { status: 'active' } }),
+        Agency.count({ where: { status: 'inactive' } })
+      ]);
+    }
 
     // Products breakdown
     const [activeProducts, inactiveProducts] = await Promise.all([
@@ -37,10 +61,11 @@ const getDashboard = async (req, res, next) => {
       Product.count({ where: { status: 'inactive' } })
     ]);
 
-    // Orders by status
+    // Orders by status - filter by agency for agency owners
     const orderStatuses = ['pending', 'confirmed', 'assigned', 'out_for_delivery', 'delivered', 'cancelled'];
     const ordersByStatusRows = await Order.findAll({
       attributes: ['status', [fn('COUNT', col('Order.id')), 'count']],
+      where: orderFilters,
       group: ['status']
     });
     const ordersByStatus = Object.fromEntries(orderStatuses.map(s => [s, 0]));
@@ -48,7 +73,7 @@ const getDashboard = async (req, res, next) => {
       ordersByStatus[row.get('status')] = parseInt(row.get('count'), 10);
     }
 
-    // Orders per agent (counts by status)
+    // Orders per agent (counts by status) - filter by agency for agency owners
     const ordersPerAgent = await Order.findAll({
       attributes: [
         'assignedAgentId',
@@ -60,6 +85,7 @@ const getDashboard = async (req, res, next) => {
         [fn('SUM', literal("CASE WHEN \"Order\".\"status\"='delivered' THEN 1 ELSE 0 END")), 'delivered'],
         [fn('SUM', literal("CASE WHEN \"Order\".\"status\"='cancelled' THEN 1 ELSE 0 END")), 'cancelled']
       ],
+      where: orderFilters,
       include: [{ model: DeliveryAgent, as: 'DeliveryAgent', attributes: ['id', 'name', 'email', 'phone', 'status'] }],
       group: [
         'assignedAgentId',
@@ -71,8 +97,9 @@ const getDashboard = async (req, res, next) => {
       ]
     });
 
-    // Recent orders with assignment
+    // Recent orders with assignment - filter by agency for agency owners
     const recentOrders = await Order.findAll({
+      where: orderFilters,
       order: [['createdAt', 'DESC']],
       limit: 20,
       include: [{ model: DeliveryAgent, as: 'DeliveryAgent', attributes: ['id', 'name', 'email', 'phone'] }]

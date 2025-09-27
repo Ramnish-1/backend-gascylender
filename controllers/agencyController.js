@@ -19,6 +19,11 @@ const create = async (req, res, next) => {
   try {
     await ensureAdmin(req.user.userId);
 
+    // Handle image upload if provided
+    if (req.file) {
+      req.body.profileImage = req.file.path; // Cloudinary URL
+    }
+
     const { error, value } = createAgency.validate(req.body);
     if (error) return next(createError(400, error.details[0].message));
 
@@ -68,7 +73,8 @@ const create = async (req, res, next) => {
         isActive: true,
         isEmailVerified: true,
         confirmationToken: null,
-        confirmationTokenExpires: null
+        confirmationTokenExpires: null,
+        profileImage: value.profileImage || null // Set agency image as owner's profile image
       }, { transaction });
 
       // Update agency with owner
@@ -448,7 +454,7 @@ const listActive = async (req, res, next) => {
       order: [['createdAt', 'DESC']], 
       limit, 
       offset,
-      attributes: ['id', 'name', 'email', 'phone', 'addressTitle', 'address', 'city', 'pincode', 'landmark', 'status', 'createdAt'] // Exclude sensitive fields
+      attributes: ['id', 'name', 'email', 'phone', 'addressTitle', 'address', 'city', 'pincode', 'landmark', 'profileImage', 'status', 'createdAt'] // Exclude sensitive fields
     });
 
     // Transform the response to include agencyId field
@@ -481,6 +487,12 @@ const getById = async (req, res, next) => {
 const update = async (req, res, next) => {
   try {
     await ensureAdmin(req.user.userId);
+    
+    // Handle image upload if provided
+    if (req.file) {
+      req.body.profileImage = req.file.path; // Cloudinary URL
+    }
+    
     const { error, value } = updateAgency.validate(req.body);
     if (error) return next(createError(400, error.details[0].message));
 
@@ -492,34 +504,266 @@ const update = async (req, res, next) => {
       const exists = await Agency.findOne({ where: { email: value.email } });
       if (exists) return next(createError(400, 'Agency with this email already exists'));
       
+      // Check if agency owner with new email already exists
+      const ownerExists = await AgencyOwner.findOne({ where: { email: value.email } });
+      if (ownerExists) return next(createError(400, 'Agency owner with this email already exists'));
+      
       // Email is changing - generate new confirmation token and send email
       const token = crypto.randomBytes(24).toString('hex');
       const confirmationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       
-      // Update with new email and reset confirmation status
-      await agency.update({
-        ...value,
-        email: value.email,
-        status: 'inactive', // Reset to inactive when email changes
-        confirmationToken: token,
-        confirmationExpiresAt
-      });
+      // Generate new password for agency owner
+      const newPassword = crypto.randomBytes(8).toString('hex');
+      
+      // Use transaction to update both agency and agency owner
+      const { sequelize } = require('../config/database');
+      const transaction = await sequelize.transaction();
+      
+      try {
+        // Update agency with new email and reset confirmation status
+        await agency.update({
+          ...value,
+          email: value.email,
+          status: 'inactive', // Reset to inactive when email changes
+          confirmationToken: token,
+          confirmationExpiresAt
+        }, { transaction });
+        
+        // Update agency owner with new email and password
+        const agencyOwner = await AgencyOwner.findOne({ 
+          where: { agencyId: agency.id },
+          transaction 
+        });
+        
+        if (agencyOwner) {
+          await agencyOwner.update({
+            email: value.email,
+            password: newPassword,
+            isEmailVerified: false, // Reset email verification status
+            confirmationToken: null,
+            confirmationTokenExpires: null
+          }, { transaction });
+        }
+        
+        // If profileImage was updated, also update the agency owner's profile image
+        if (value.profileImage && agencyOwner) {
+          await agencyOwner.update(
+            { profileImage: value.profileImage },
+            { transaction }
+          );
+        }
+        
+        await transaction.commit();
+        
+        // Create email template for new credentials
+        const emailTemplate = `
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title style="margin: 0 0 8px 0; font-size: 24px; font-weight: bold; color: #1a202c; letter-spacing: -0.5px;">Agency Email Updated - New Login Credentials</title>
+          </head>
+          <body style="margin: 0; padding: 0; background-color: #f5f7fa; font-family: Arial, sans-serif;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f7fa; padding: 15px;">
+              <tr>
+                <td align="center">
+                  <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); overflow: hidden;">
+                    <!-- Content -->
+                    <tr>
+                      <td style="padding: 10px;">
+                        
+                        <!-- Update Section -->
+                        <div style="text-align: center; margin-bottom: 15px;">
+                          <h2 style="margin: 0 0 6px 0; font-size: 24px; font-weight: bold; color: #1a202c; letter-spacing: -0.5px;">Agency Email Updated! 📧</h2>
+                          <p style="margin: 0; font-size: 16px; color: #718096;">Your agency email has been updated with new login credentials</p>
+                        </div>
+                        
+                        <!-- Agency Information Card -->
+                        <div style="background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%); border-radius: 8px; padding: 18px; margin: 15px 0; border: 1px solid #e2e8f0;">
+                          <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: bold; color: #2d3748;">🏢 Agency Information</h3>
+                          
+                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td style="padding: 6px 0; border-bottom: 1px solid #e2e8f0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Agency Name</td>
+                                    <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.name}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding: 6px 0; border-bottom: 1px solid #e2e8f0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">New Email Address</td>
+                                    <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${value.email}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding: 6px 0; border-bottom: 1px solid #e2e8f0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Phone Number</td>
+                                    <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.phone}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding: 8px 0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-weight: bold; color: #4a5568; font-size: 14px; width: 35%;">Location</td>
+                                    <td style="color: #2d3748; font-weight: bold; font-size: 14px;">${agency.address}, ${agency.city} - ${agency.pincode}</td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+                        </div>
+                        
+                        <!-- New Credentials Card -->
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; padding: 18px; margin: 15px 0; color: white;">
+                          <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: bold;">🔐 Your New Login Credentials</h3>
+                          
+                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td style="padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.2);">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Email</td>
+                                    <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${value.email}</td>
+                                    <td style="width: 20%; text-align: right;">
+                                      <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding: 8px 0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Password</td>
+                                    <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${newPassword}</td>
+                                    <td style="width: 20%; text-align: right;">
+                                      <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+                        </div>
+                        
+                        <!-- Login Button -->
+                        <div style="text-align: center; margin: 18px 0;">
+                          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/agency/login" style="display: inline-block; background: linear-gradient(135deg, #48bb78 0%, #38a169 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 15px rgba(72, 187, 120, 0.3);color:black;">🚀 Access Your Dashboard</a>
+                        </div>
+                        
+                        <!-- Security Section -->
+                        <div style="background: linear-gradient(135deg, #fef5e7 0%, #fed7aa 100%); border: 1px solid #f6ad55; border-radius: 8px; padding: 15px; margin: 15px 0;">
+                          <h4 style="margin: 0 0 8px 0; color: #c05621; font-size: 15px; font-weight: bold;">🛡️ Security Reminders</h4>
+                          <ul style="color: #c05621; margin: 0; padding-left: 18px;">
+                            <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Your agency email has been updated successfully</li>
+                            <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Please use the new credentials to login</li>
+                            <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Change your password after first login for security</li>
+                            <li style="margin-bottom: 4px; font-size: 13px; line-height: 1.4;">Keep your login credentials secure and confidential</li>
+                            <li style="margin-bottom: 0; font-size: 13px; line-height: 1.4;">Contact our support team if you need any assistance</li>
+                          </ul>
+                        </div>
+                        
+                      </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                      <td style="background-color: #2d3748; color: white; padding: 25px; text-align: center;">
+                        <p style="margin: 0; color: #a0aec0; font-size: 13px;">Best regards,</p>
+                        <p style="margin: 5px 0 0 0; color: white; font-weight: bold; font-size: 14px;">LPG Gas Platform Team</p>
+                        <p style="margin: 15px 0 0 0; font-size: 11px; color: #718096;">This is an automated message. Please do not reply to this email.</p>
+                      </td>
+                    </tr>
+                    
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+          </html>
+        `;
 
-      // Send confirmation email to new email address
-      const { sendEmail } = require('../config/email');
-      const confirmUrl = `${process.env.BACKEND_BASE_URL || 'http://localhost:5000'}/api/agencies/confirm?token=${token}`;
-      await sendEmail(value.email, 'agencyConfirmation', { agency: { ...agency.toJSON(), email: value.email }, confirmUrl });
+        // Send email with new credentials
+        try {
+          if (process.env.EMAIL_HOST && process.env.EMAIL_USER) {
+            // Send email directly using nodemailer
+            const nodemailer = require('nodemailer');
+            
+            const transporter = nodemailer.createTransport({
+              host: process.env.EMAIL_HOST,
+              port: process.env.EMAIL_PORT,
+              secure: false,
+              auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASSWORD
+              }
+            });
 
-      logger.info(`Agency email changed: ${agency.email} -> ${value.email}. New confirmation email sent.`);
+            await transporter.sendMail({
+              from: process.env.EMAIL_USER,
+              to: value.email,
+              subject: '📧 Agency Email Updated - New Login Credentials',
+              html: emailTemplate
+            });
 
-      res.status(200).json({ 
-        success: true, 
-        message: 'Agency updated. New confirmation email sent to the new email address.', 
-        data: agency 
-      });
+            logger.info(`Email with new credentials sent successfully to: ${value.email}`);
+          } else {
+            logger.info(`Agency email updated: ${agency.email} -> ${value.email} (Email skipped - no email server configured)`);
+          }
+        } catch (emailError) {
+          logger.error(`Email sending failed: ${emailError.message}`);
+          // Don't throw error here as agency is already updated
+        }
+
+        logger.info(`Agency email changed: ${agency.email} -> ${value.email}. New credentials sent.`);
+
+        res.status(200).json({ 
+          success: true, 
+          message: 'Agency updated. New login credentials sent to the updated email address.', 
+          data: {
+            ...agency.toJSON(),
+            email: value.email
+          },
+          credentials: {
+            email: value.email,
+            password: newPassword
+          }
+        });
+
+      } catch (transactionError) {
+        // Rollback transaction on error
+        await transaction.rollback();
+        logger.error(`Transaction failed: ${transactionError.message}`);
+        return next(createError(500, 'Failed to update agency email and credentials'));
+      }
     } else {
       // No email change - normal update
       await agency.update(value);
+      
+      // If profileImage was updated, also update the agency owner's profile image
+      if (value.profileImage) {
+        const { AgencyOwner } = require('../models');
+        await AgencyOwner.update(
+          { profileImage: value.profileImage },
+          { where: { agencyId: agency.id } }
+        );
+      }
+      
       res.status(200).json({ success: true, message: 'Agency updated', data: agency });
     }
   } catch (error) { next(error); }

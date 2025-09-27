@@ -67,6 +67,9 @@ const validateUpdateProfile = Joi.object({
     'string.min': 'Name must be at least 2 characters long',
     'string.max': 'Name cannot exceed 100 characters'
   }),
+  email: Joi.string().email().optional().messages({
+    'string.email': 'Please provide a valid email address'
+  }),
   phone: Joi.string().pattern(/^[0-9]{10,15}$/).optional().messages({
     'string.pattern.base': 'Phone number must be 10-15 digits'
   }),
