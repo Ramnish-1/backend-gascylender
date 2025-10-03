@@ -227,6 +227,19 @@ const create = async (req, res, next) => {
         </html>
       `;
 
+      // Emit socket notification
+      const socketService = global.socketService;
+      if (socketService) {
+        socketService.emitAgencyCreated({
+          id: agency.id,
+          name: agency.name,
+          email: agency.email,
+          city: agency.city,
+          status: agency.status,
+          createdBy: req.user.email || 'admin'
+        });
+      }
+
       // Send response first
       res.status(201).json({
         success: true,
@@ -801,6 +814,36 @@ const updateStatus = async (req, res, next) => {
       }
 
       logger.info(`Admin updated agency status: ${agency.email} -> ${status}`);
+      
+      // Emit socket notification for agency status change
+      const socketService = global.socketService;
+      if (socketService) {
+        // Prepare complete agency data for real-time updates
+        const agencyUpdateData = {
+          id: agency.id,
+          name: agency.name,
+          email: agency.email,
+          phone: agency.phone,
+          address: agency.address,
+          city: agency.city,
+          pincode: agency.pincode,
+          profileImage: agency.profileImage,
+          status: agency.status,
+          updatedBy: req.user.email || 'admin',
+          statusChanged: true
+        };
+
+        socketService.emitAgencyUpdated(agencyUpdateData);
+
+        // If agency is deactivated, notify agency owner to logout
+        if (status === 'inactive') {
+          socketService.sendToUserByEmail(agency.email, 'agency:force-logout', {
+            type: 'AGENCY_DEACTIVATED',
+            message: 'Your agency has been deactivated by admin. You will be logged out.',
+            timestamp: new Date()
+          }, 'agency_owner');
+        }
+      }
       
       res.status(200).json({
         success: true,

@@ -68,6 +68,18 @@ const createProductHandler = async (req, res, next) => {
 
     logger.info(`Product created: ${product.productName} by admin`);
 
+    // Emit socket notification
+    const socketService = global.socketService;
+    if (socketService) {
+      socketService.emitProductCreated({
+        id: product.id,
+        productName: product.productName,
+        category: product.category,
+        status: product.status,
+        createdBy: req.user.email || 'admin'
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: 'Product created successfully',
@@ -148,6 +160,13 @@ const getAllProducts = async (req, res, next) => {
     
     if (status) {
       whereClause.status = status;
+    } else {
+      // Role-based default filtering
+      if (req.user && req.user.role === 'customer') {
+        // Customers only see active products by default
+        whereClause.status = 'active';
+      }
+      // Admin and agency owners see all products (no status filter)
     }
     if (search) {
       whereClause[Op.or] = [
@@ -177,6 +196,14 @@ const getAllProducts = async (req, res, next) => {
         required: false
       });
     }
+
+    console.log('🔍 DEBUG: API Call Details:', {
+      user: req.user ? req.user.email : 'No user',
+      role: req.user ? req.user.role : 'No role',
+      status: status,
+      whereClause: whereClause,
+      agencyId: agencyId
+    });
 
     const products = await Product.findAndCountAll({
       where: whereClause,
@@ -379,6 +406,18 @@ const updateProductHandler = async (req, res, next) => {
 
     logger.info(`Product updated: ${product.productName}`);
 
+    // Emit socket notification
+    const socketService = global.socketService;
+    if (socketService) {
+      socketService.emitProductUpdated({
+        id: product.id,
+        productName: product.productName,
+        category: product.category,
+        status: product.status,
+        updatedBy: req.user.email || 'admin'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Product updated successfully',
@@ -434,6 +473,48 @@ const updateProductStatus = async (req, res, next) => {
     await product.update({ status: value.status });
 
     logger.info(`Product status updated: ${product.productName} - ${value.status}`);
+
+    // Emit socket notification for global product status change
+    const socketService = global.socketService;
+    if (socketService) {
+      // Get all agencies that have this product in their inventory
+      const agenciesWithProduct = await AgencyInventory.findAll({
+        where: { productId: id },
+        include: [{ model: Agency, as: 'Agency', attributes: ['id', 'name'] }]
+      });
+
+      logger.info(`📤 Emitting global product status change for ${agenciesWithProduct.length} agencies`);
+      logger.info(`📤 Agencies with product:`, agenciesWithProduct.map(ai => ({ 
+        agencyId: ai.Agency.id, 
+        agencyName: ai.Agency.name,
+        currentIsActive: ai.isActive 
+      })));
+
+      // Emit to each agency that has this product
+      agenciesWithProduct.forEach(agencyInventory => {
+        const inventoryData = {
+          productId: product.id,
+          productName: product.productName,
+          agencyId: agencyInventory.Agency.id,
+          agencyName: agencyInventory.Agency.name,
+          stock: agencyInventory.stock,
+          lowStockThreshold: agencyInventory.lowStockThreshold,
+          isActive: value.status === 'active' ? agencyInventory.isActive : false, // If product is inactive globally, set isActive to false
+          action: 'global_status_updated'
+        };
+        
+        logger.info(`📤 Emitting to agency ${agencyInventory.Agency.name}:`, inventoryData);
+        socketService.emitInventoryUpdated(inventoryData);
+      });
+
+      // Also emit a global product status change event
+      socketService.emitGlobalProductStatusChange({
+        productId: product.id,
+        productName: product.productName,
+        status: value.status,
+        affectedAgencies: agenciesWithProduct.length
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -683,6 +764,21 @@ const addProductToAgency = async (req, res, next) => {
 
     logger.info(`Product added to agency inventory: ${product.productName} -> ${agency.name}`);
 
+    // Emit socket notification
+    const socketService = global.socketService;
+    if (socketService) {
+      socketService.emitInventoryUpdated({
+        productId: product.id,
+        productName: product.productName,
+        agencyId: agency.id,
+        agencyName: agency.name,
+        stock: inventory.stock,
+        lowStockThreshold: inventory.lowStockThreshold,
+        isActive: inventory.isActive,
+        action: 'added'
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: 'Product added to agency inventory successfully',
@@ -731,6 +827,37 @@ const updateAgencyInventory = async (req, res, next) => {
     await inventory.update(value);
 
     logger.info(`Agency inventory updated: ${inventory.Product.productName} -> ${inventory.Agency.name}`);
+
+    // Emit socket notification
+    const socketService = global.socketService;
+    logger.info(`🔌 Socket service available: ${!!socketService}`);
+    if (socketService) {
+      const inventoryData = {
+        productId: inventory.Product.id,
+        productName: inventory.Product.productName,
+        agencyId: inventory.Agency.id,
+        agencyName: inventory.Agency.name,
+        stock: inventory.stock,
+        lowStockThreshold: inventory.lowStockThreshold,
+        isActive: inventory.isActive,
+        action: 'updated'
+      };
+      
+      logger.info(`📤 Emitting inventory update with data:`, JSON.stringify(inventoryData, null, 2));
+      socketService.emitInventoryUpdated(inventoryData);
+
+      // Check for low stock alert
+      if (inventory.stock <= inventory.lowStockThreshold) {
+        socketService.emitLowStockAlert({
+          productId: inventory.Product.id,
+          productName: inventory.Product.productName,
+          agencyId: inventory.Agency.id,
+          agencyName: inventory.Agency.name,
+          stock: inventory.stock,
+          lowStockThreshold: inventory.lowStockThreshold
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,

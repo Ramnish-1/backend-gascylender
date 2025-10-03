@@ -4,6 +4,11 @@ const { createError } = require('../utils/errorHandler');
 const logger = require('../utils/logger');
 const { Op } = require('sequelize');
 
+// Get socket service instance
+const getSocketService = () => {
+  return global.socketService;
+};
+
 // Create a new delivery agent
 const createAgent = async (req, res, next) => {
   try {
@@ -73,6 +78,20 @@ const createAgent = async (req, res, next) => {
     const agent = await DeliveryAgent.create(value);
 
     logger.info(`Delivery agent created: ${agent.email} for agency: ${value.agencyId}`);
+
+    // Emit socket notification for agent creation
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitAgentCreated({
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        phone: agent.phone,
+        agencyId: agent.agencyId,
+        status: agent.status,
+        createdBy: req.user.email || 'admin'
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -249,6 +268,20 @@ const updateAgent = async (req, res, next) => {
 
     logger.info(`Delivery agent updated: ${agent.email}`);
 
+    // Emit socket notification for agent update
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitAgentUpdated({
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        phone: agent.phone,
+        agencyId: agent.agencyId,
+        status: agent.status,
+        updatedBy: req.user.email || 'admin'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Delivery agent updated successfully',
@@ -317,6 +350,21 @@ const updateAgentStatus = async (req, res, next) => {
     await agent.update({ status: value.status });
 
     logger.info(`Delivery agent status updated: ${agent.email} - ${value.status}`);
+
+    // Emit socket notification for agent status change
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitAgentStatusUpdated({
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        phone: agent.phone,
+        agencyId: agent.agencyId,
+        status: agent.status,
+        updatedBy: req.user.email || 'admin',
+        timestamp: new Date()
+      });
+    }
 
     res.status(200).json({
       success: true,

@@ -4,6 +4,11 @@ const { createError } = require('../utils/errorHandler');
 const logger = require('../utils/logger');
 const { Op } = require('sequelize');
 
+// Get socket service instance
+const getSocketService = () => {
+  return global.socketService;
+};
+
 // Create new Terms & Conditions (single or multiple)
 const createTermsAndConditionsHandler = async (req, res, next) => {
   try {
@@ -91,6 +96,17 @@ const createTermsAndConditionsHandler = async (req, res, next) => {
       const termsAndConditions = await TermsAndConditions.create(value);
 
       logger.info(`Terms & Conditions created: ${termsAndConditions.title}`);
+
+      // Emit socket notification for terms creation
+      const socketService = getSocketService();
+      if (socketService) {
+        socketService.emitTermsCreated({
+          id: termsAndConditions.id,
+          title: termsAndConditions.title,
+          status: termsAndConditions.status,
+          createdBy: req.user.email || 'admin'
+        });
+      }
 
       res.status(201).json({
         success: true,
@@ -214,6 +230,17 @@ const updateTermsAndConditionsHandler = async (req, res, next) => {
     await termsAndConditions.update(value);
 
     logger.info(`Terms & Conditions updated: ${termsAndConditions.title}`);
+
+    // Emit socket notification for terms update
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitTermsUpdated({
+        id: termsAndConditions.id,
+        title: termsAndConditions.title,
+        status: termsAndConditions.status,
+        updatedBy: req.user.email || 'admin'
+      });
+    }
 
     res.status(200).json({
       success: true,

@@ -4,6 +4,11 @@ const { createError } = require('../utils/errorHandler');
 const logger = require('../utils/logger');
 const { Op } = require('sequelize');
 
+// Get socket service instance
+const getSocketService = () => {
+  return global.socketService;
+};
+
 // Create new Privacy Policy
 const createPrivacyPolicyHandler = async (req, res, next) => {
   try {
@@ -26,6 +31,17 @@ const createPrivacyPolicyHandler = async (req, res, next) => {
     const privacyPolicy = await PrivacyPolicy.create(value);
 
     logger.info(`Privacy Policy created: ${privacyPolicy.title}`);
+
+    // Emit socket notification for privacy policy creation
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitPrivacyPolicyCreated({
+        id: privacyPolicy.id,
+        title: privacyPolicy.title,
+        status: privacyPolicy.status,
+        createdBy: req.user.email || 'admin'
+      });
+    }
 
     res.status(201).json({
       success: true,

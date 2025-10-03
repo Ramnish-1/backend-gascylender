@@ -3,44 +3,31 @@ const config = require('./config/database');
 const logger = require('./utils/logger');
 const { Server } = require('socket.io');
 const http = require('http');
-const orderController = require('./controllers/orderController');
+const socketService = require('./services/socketService');
 
 const PORT = process.env.PORT || 5000;
 
 // Create HTTP server
 const server = http.createServer(app);
 
-// Initialize Socket.IO
+// Initialize Socket.IO with enhanced configuration
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
-// Set socket instance in order controller
-orderController.setSocketInstance(io);
+// Initialize Socket Service
+socketService.initialize(io);
 
-// Socket connection handling
-io.on('connection', (socket) => {
-  logger.info(`Client connected: ${socket.id}`);
-
-  socket.on('disconnect', () => {
-    logger.info(`Client disconnected: ${socket.id}`);
-  });
-
-  // Join admin room
-  socket.on('join-admin', () => {
-    socket.join('admin');
-    logger.info(`Admin joined: ${socket.id}`);
-  });
-
-  // Join agent room
-  socket.on('join-agent', (agentId) => {
-    socket.join(`agent-${agentId}`);
-    logger.info(`Agent ${agentId} joined: ${socket.id}`);
-  });
-});
+// Make socket service available globally
+global.socketService = socketService;
 
 // Test database connection
 config.sequelize.authenticate()

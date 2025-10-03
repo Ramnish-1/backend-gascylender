@@ -19,8 +19,13 @@ const fs = require('fs');
 const path = require('path');
 const { Op } = require('sequelize');
 
+// Get socket service instance
+const getSocketService = () => {
+  return global.socketService;
+};
+
 // Generate JWT token
-const generateToken = (userId) => {
+const generateToken = (userId, role, additionalData = {}) => {
   const jwtSecret = process.env.JWT_SECRET;
   
   if (!jwtSecret) {
@@ -28,7 +33,11 @@ const generateToken = (userId) => {
   }
   
   return jwt.sign(
-    { userId },
+    { 
+      userId, 
+      role,
+      ...additionalData
+    },
     jwtSecret,
     { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
   );
@@ -70,7 +79,7 @@ const login = async (req, res, next) => {
       // Blocked user cannot login
       if (user.isBlocked) {
         logger.warn(`Blocked user attempted login: ${email}`);
-        return next(createError(403, 'Your account is blocked by admin.'));
+        return next(createError(403, 'Your account is blocked by admin please contact.'));
       }
 
       userType = user.role;
@@ -136,10 +145,27 @@ const login = async (req, res, next) => {
       }
     }
 
-    // Generate token with userType
-    const token = generateToken(userData.id);
+    // Generate token with userType and additional data
+    const additionalData = {};
+    if (userData.agencyId) additionalData.agencyId = userData.agencyId;
+    if (userData.deliveryAgentId) additionalData.deliveryAgentId = userData.deliveryAgentId;
+    if (userData.email) additionalData.email = userData.email;
+    
+    const token = generateToken(userData.id, userData.role || userType, additionalData);
 
     logger.info(`User logged in: ${email} (${userType})`);
+
+    // Emit socket notification for user login
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitNotification('USER_LOGGED_IN', {
+        userId: userData.id,
+        email: userData.email,
+        role: userData.role || userType,
+        name: userData.name,
+        loginTime: new Date()
+      }, ['admin']);
+    }
 
     res.status(200).json({
       success: true,
@@ -643,7 +669,7 @@ const requestOTP = async (req, res, next) => {
     // Blocked user cannot request OTP
     if (user.isBlocked) {
       logger.warn(`Blocked user attempted OTP request: ${email} (${role})`);
-      return next(createError(403, 'Your account is blocked by admin.'));
+      return next(createError(403, 'Your account is blocked by admin please contact.'));
     }
 
     // Generate OTP
@@ -728,11 +754,14 @@ const verifyOTP = async (req, res, next) => {
     // Blocked user cannot login
     if (user.isBlocked) {
       logger.warn(`Blocked user attempted OTP verify: ${email} (${role})`);
-      return next(createError(403, 'Your account is blocked by admin.'));
+      return next(createError(403, 'Your account is blocked by admin please contact.'));
     }
 
-    // Generate token
-    const token = generateToken(user.id);
+    // Generate token with role and additional data
+    const additionalData = { email: user.email };
+    if (user.deliveryAgentId) additionalData.deliveryAgentId = user.deliveryAgentId;
+    
+    const token = generateToken(user.id, user.role, additionalData);
 
     logger.info(`User logged in with OTP: ${user.email} (${user.role})`);
 
@@ -1152,6 +1181,30 @@ const setUserBlockStatus = async (req, res, next) => {
 
     logger.info(`Admin ${admin.email} set block=${isBlocked} for ${user.email} (${user.role})`);
 
+    // Emit socket notification for user block/unblock
+    const socketService = getSocketService();
+    if (socketService) {
+      // Notify admin about the action
+      socketService.emitNotification('USER_BLOCK_STATUS_CHANGED', {
+        userId: user.id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        isBlocked: isBlocked,
+        blockedBy: admin.email,
+        timestamp: new Date()
+      }, ['admin']);
+
+      // If user is blocked, force logout by sending logout event to that user
+      if (isBlocked) {
+        socketService.sendToUserByEmail(user.email, 'user:force-logout', {
+          type: 'ACCOUNT_BLOCKED',
+          message: 'Your account has been blocked by admin. You will be logged out.',
+          timestamp: new Date()
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: `User ${isBlocked ? 'blocked' : 'unblocked'} successfully`,
@@ -1467,6 +1520,21 @@ const updateAgentStatus = async (req, res, next) => {
     const updatedAgent = await DeliveryAgent.findByPk(deliveryAgent.id);
 
     logger.info(`Agent status updated: ${user.email} - ${status}`);
+
+    // Emit socket notification for agent status change
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitAgentStatusUpdated({
+        id: updatedAgent.id,
+        name: updatedAgent.name,
+        email: updatedAgent.email,
+        phone: updatedAgent.phone,
+        agencyId: updatedAgent.agencyId,
+        status: updatedAgent.status,
+        updatedBy: user.email,
+        timestamp: new Date()
+      });
+    }
 
     res.status(200).json({
       success: true,

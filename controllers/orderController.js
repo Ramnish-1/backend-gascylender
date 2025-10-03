@@ -15,19 +15,9 @@ const {
 const logger = require('../utils/logger');
 const { Op, sequelize } = require('sequelize');
 
-// Global socket instance (will be set from server.js)
-let io;
-
-// Set socket instance
-const setSocketInstance = (socketInstance) => {
-  io = socketInstance;
-};
-
-// Emit socket notification
-const emitNotification = (type, data) => {
-  if (io) {
-    io.emit('notification', createNotificationPayload(type, data));
-  }
+// Get socket service instance
+const getSocketService = () => {
+  return global.socketService;
 };
 
 // Create new order (Customer checkout)
@@ -158,13 +148,18 @@ const createOrderHandler = async (req, res, next) => {
     logger.info(`Order created: ${order.orderNumber} for agency: ${agencyId}`);
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.ORDER_CREATED, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      customerName: order.customerName,
-      totalAmount: order.totalAmount,
-      agencyId: agencyId
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderCreated({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerEmail: order.customerEmail,
+        totalAmount: order.totalAmount,
+        agencyId: agencyId,
+        status: order.status
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -434,11 +429,17 @@ const updateOrderStatusHandler = async (req, res, next) => {
     }
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES[`ORDER_${value.status.toUpperCase()}`], {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      status: value.status
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderStatusUpdated({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: value.status,
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId,
+        assignedAgentId: order.assignedAgentId
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -491,12 +492,18 @@ const assignAgentHandler = async (req, res, next) => {
     await sendEmail(order.customerEmail, 'orderAssigned', formatOrderResponse(order), agent);
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.ORDER_ASSIGNED, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      agentId: agent.id,
-      agentName: agent.name
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderAssigned({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        agentId: agent.id,
+        agentName: agent.name,
+        assignedAgentId: agent.id,
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -554,10 +561,18 @@ const sendOTPHandler = async (req, res, next) => {
     await sendEmail(order.customerEmail, 'deliveryOTP', { ...formatOrderResponse(order), otp });
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.OTP_SENT, {
-      orderId: order.id,
-      orderNumber: order.orderNumber
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderStatusUpdated({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: 'out_for_delivery',
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId,
+        assignedAgentId: order.assignedAgentId,
+        otpSent: true
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -635,12 +650,18 @@ const verifyOTPHandler = async (req, res, next) => {
     await sendEmail(order.customerEmail, 'orderDelivered', formatOrderResponse(order));
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.ORDER_DELIVERED, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      deliveryProof: req.file ? true : false,
-      paymentReceived: value.paymentReceived || false
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderDelivered({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        deliveryProof: req.file ? true : false,
+        paymentReceived: value.paymentReceived || false,
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId,
+        assignedAgentId: order.assignedAgentId
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -724,11 +745,18 @@ const cancelOrderHandler = async (req, res, next) => {
     await sendEmail(order.customerEmail, 'orderCancelled', formatOrderResponse(order), value.reason);
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.ORDER_CANCELLED, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      reason: value.reason
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderStatusUpdated({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: 'cancelled',
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId,
+        assignedAgentId: order.assignedAgentId,
+        reason: value.reason
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -1237,11 +1265,18 @@ const returnOrderHandler = async (req, res, next) => {
     await sendEmail(order.customerEmail, 'orderReturned', formatOrderResponse(order), value.reason);
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.ORDER_RETURNED, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      reason: value.reason
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderStatusUpdated({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: 'returned',
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId,
+        assignedAgentId: order.assignedAgentId,
+        reason: value.reason
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -1392,14 +1427,19 @@ const markPaymentReceivedHandler = async (req, res, next) => {
     logger.info(`Payment marked as ${value.paymentReceived ? 'received' : 'not received'} and order delivered: ${order.orderNumber} by ${req.user.name || req.user.email}`);
 
     // Emit socket notification
-    emitNotification(NOTIFICATION_TYPES.PAYMENT_UPDATED, {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      paymentReceived: value.paymentReceived,
-      orderStatus: 'delivered',
-      deliveredAt: new Date(),
-      updatedBy: req.user.name || req.user.email
-    });
+    const socketService = getSocketService();
+    if (socketService) {
+      socketService.emitOrderStatusUpdated({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: 'delivered',
+        customerEmail: order.customerEmail,
+        agencyId: order.agencyId,
+        paymentReceived: value.paymentReceived,
+        deliveredAt: new Date(),
+        updatedBy: req.user.name || req.user.email
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -1423,7 +1463,6 @@ const markPaymentReceivedHandler = async (req, res, next) => {
 };
 
 module.exports = {
-  setSocketInstance,
   createOrderHandler,
   getAllOrders,
   getOrderById,
