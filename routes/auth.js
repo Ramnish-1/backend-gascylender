@@ -27,6 +27,7 @@ router.delete('/account', authenticate, authController.deleteAccount); // Delete
 
 // Admin only routes
 router.get('/customers', authenticate, authController.getAllCustomers); // Get all customers (Admin only)
+router.get('/customers/:customerId', authenticate, authController.getCustomerDetails); // Get detailed customer information (Admin and Agency Owner)
 router.patch('/users/:userId/block', authenticate, authController.setUserBlockStatus); // Block/unblock user (Admin only)
 
 module.exports = router;

@@ -14,6 +14,9 @@ router.post('/', upload.single('profileImage'), deliveryAgentController.createAg
 // Supports: pagination, search, status filter, and getting by ID
 router.get('/', deliveryAgentController.getAllAgents);
 
+// Get detailed agent information with all delivered orders
+router.get('/:agentId', deliveryAgentController.getAgentDetails);
+
 // Update delivery agent (optional image upload)
 router.put('/:id', upload.single('profileImage'), deliveryAgentController.updateAgent);
 

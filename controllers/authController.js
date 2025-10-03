@@ -1562,6 +1562,235 @@ const updateAgentStatus = async (req, res, next) => {
   }
 };
 
+// Get detailed customer information with all orders and delivery details (Admin and Agency Owner)
+const getCustomerDetails = async (req, res, next) => {
+  try {
+    const userRole = req.user.role;
+    const { customerId } = req.params;
+    
+    // Check if user is admin or agency owner
+    if (userRole !== 'admin' && userRole !== 'agency_owner') {
+      return next(createError(403, 'Only admin and agency owners can access customer details'));
+    }
+
+    // Find the customer
+    const customer = await User.findByPk(customerId, {
+      where: { role: 'customer' }
+    });
+
+    if (!customer) {
+      return next(createError(404, 'Customer not found'));
+    }
+
+    // For agency owners, check if customer has orders with their agency
+    if (userRole === 'agency_owner') {
+      const { Order } = require('../models');
+      
+      // Check if customer has any orders with this agency
+      const hasOrdersWithAgency = await Order.findOne({
+        where: { 
+          customerEmail: customer.email,
+          agencyId: req.user.agencyId 
+        }
+      });
+      
+      if (!hasOrdersWithAgency) {
+        return next(createError(403, 'This customer has no orders with your agency'));
+      }
+    }
+
+    // Get all orders for this customer with full details
+    const { Order, DeliveryAgent, Agency } = require('../models');
+    
+    const orders = await Order.findAll({
+      where: { customerEmail: customer.email },
+      include: [
+        {
+          model: DeliveryAgent,
+          as: 'DeliveryAgent',
+          attributes: [
+            'id', 'name', 'email', 'phone', 'vehicleNumber', 
+            'status', 'profileImage', 'joinedAt'
+          ],
+          include: [
+            {
+              model: Agency,
+              as: 'Agency',
+              attributes: ['id', 'name', 'email', 'phone', 'address', 'city']
+            }
+          ]
+        },
+        {
+          model: Agency,
+          as: 'Agency',
+          attributes: ['id', 'name', 'email', 'phone', 'address', 'city']
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    // Calculate customer statistics
+    const totalOrders = orders.length;
+    const completedOrders = orders.filter(order => order.status === 'delivered').length;
+    const pendingOrders = orders.filter(order => ['pending', 'confirmed', 'assigned', 'out_for_delivery'].includes(order.status)).length;
+    const cancelledOrders = orders.filter(order => order.status === 'cancelled').length;
+    const totalSpent = orders
+      .filter(order => order.status === 'delivered')
+      .reduce((sum, order) => sum + parseFloat(order.totalAmount || 0), 0);
+
+    // Get unique delivery agents who delivered to this customer
+    const deliveryAgents = orders
+      .filter(order => order.DeliveryAgent)
+      .map(order => order.DeliveryAgent)
+      .filter((agent, index, self) => 
+        index === self.findIndex(a => a.id === agent.id)
+      );
+
+    // Get order status distribution
+    const statusDistribution = orders.reduce((acc, order) => {
+      acc[order.status] = (acc[order.status] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Get recent activity (last 10 orders)
+    const recentOrders = orders.slice(0, 10).map(order => ({
+      id: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      createdAt: order.createdAt,
+      deliveredAt: order.deliveredAt,
+      deliveryAgent: order.DeliveryAgent ? {
+        id: order.DeliveryAgent.id,
+        name: order.DeliveryAgent.name,
+        phone: order.DeliveryAgent.phone,
+        vehicleNumber: order.DeliveryAgent.vehicleNumber,
+        agency: order.DeliveryAgent.Agency ? {
+          id: order.DeliveryAgent.Agency.id,
+          name: order.DeliveryAgent.Agency.name
+        } : null
+      } : null,
+      agency: order.Agency ? {
+        id: order.Agency.id,
+        name: order.Agency.name,
+        city: order.Agency.city
+      } : null,
+      items: order.items,
+      deliveryProofImage: order.deliveryProofImage,
+      deliveryNote: order.deliveryNote,
+      paymentReceived: order.paymentReceived
+    }));
+
+    logger.info(`Customer details accessed: ${customer.email} by ${userRole} ${req.user.userId}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Customer details retrieved successfully',
+      data: {
+        customer: {
+          id: customer.id,
+          name: customer.name,
+          email: customer.email,
+          phone: customer.phone,
+          role: customer.role,
+          profileImage: customer.profileImage,
+          address: customer.address,
+          addresses: customer.addresses,
+          isProfileComplete: customer.isProfileComplete,
+          registeredAt: customer.registeredAt,
+          isBlocked: customer.isBlocked,
+          createdAt: customer.createdAt,
+          updatedAt: customer.updatedAt
+        },
+        statistics: {
+          totalOrders,
+          completedOrders,
+          pendingOrders,
+          cancelledOrders,
+          totalSpent: parseFloat(totalSpent.toFixed(2)),
+          statusDistribution
+        },
+        deliveryAgents: deliveryAgents.map(agent => ({
+          id: agent.id,
+          name: agent.name,
+          email: agent.email,
+          phone: agent.phone,
+          vehicleNumber: agent.vehicleNumber,
+          status: agent.status,
+          profileImage: agent.profileImage,
+          joinedAt: agent.joinedAt,
+          agency: agent.Agency ? {
+            id: agent.Agency.id,
+            name: agent.Agency.name,
+            email: agent.Agency.email,
+            phone: agent.Agency.phone,
+            address: agent.Agency.address,
+            city: agent.Agency.city
+          } : null
+        })),
+        recentOrders,
+        allOrders: orders.map(order => ({
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          totalAmount: order.totalAmount,
+          paymentMethod: order.paymentMethod,
+          paymentStatus: order.paymentStatus,
+          deliveryMode: order.deliveryMode,
+          customerAddress: order.customerAddress,
+          items: order.items,
+          createdAt: order.createdAt,
+          confirmedAt: order.confirmedAt,
+          assignedAt: order.assignedAt,
+          outForDeliveryAt: order.outForDeliveryAt,
+          deliveredAt: order.deliveredAt,
+          cancelledAt: order.cancelledAt,
+          cancelledBy: order.cancelledBy,
+          cancelledByName: order.cancelledByName,
+          returnedAt: order.returnedAt,
+          returnedBy: order.returnedBy,
+          returnedByName: order.returnedByName,
+          returnReason: order.returnReason,
+          adminNotes: order.adminNotes,
+          agentNotes: order.agentNotes,
+          deliveryProofImage: order.deliveryProofImage,
+          deliveryNote: order.deliveryNote,
+          paymentReceived: order.paymentReceived,
+          deliveryAgent: order.DeliveryAgent ? {
+            id: order.DeliveryAgent.id,
+            name: order.DeliveryAgent.name,
+            email: order.DeliveryAgent.email,
+            phone: order.DeliveryAgent.phone,
+            vehicleNumber: order.DeliveryAgent.vehicleNumber,
+            status: order.DeliveryAgent.status,
+            profileImage: order.DeliveryAgent.profileImage,
+            joinedAt: order.DeliveryAgent.joinedAt,
+            agency: order.DeliveryAgent.Agency ? {
+              id: order.DeliveryAgent.Agency.id,
+              name: order.DeliveryAgent.Agency.name,
+              email: order.DeliveryAgent.Agency.email,
+              phone: order.DeliveryAgent.Agency.phone,
+              address: order.DeliveryAgent.Agency.address,
+              city: order.DeliveryAgent.Agency.city
+            } : null
+          } : null,
+          agency: order.Agency ? {
+            id: order.Agency.id,
+            name: order.Agency.name,
+            email: order.Agency.email,
+            phone: order.Agency.phone,
+            address: order.Agency.address,
+            city: order.Agency.city
+          } : null
+        }))
+      }
+    });
+  } catch (error) {
+    logger.error(`Error getting customer details: ${error.message}`);
+    next(error);
+  }
+};
+
 module.exports = {
   login,
   setupUser,
@@ -1577,6 +1806,7 @@ module.exports = {
   logout,
   deleteAccount,
   getAllCustomers,
+  getCustomerDetails,
   setUserBlockStatus,
   forgotPasswordRequest,
   resetPassword
