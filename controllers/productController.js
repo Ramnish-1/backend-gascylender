@@ -20,6 +20,10 @@ const createProductHandler = async (req, res, next) => {
     if (typeof body.images === 'string') {
       try { body.images = JSON.parse(body.images); } catch (_) {}
     }
+    // Accept tags as JSON string from form-data
+    if (typeof body.tags === 'string') {
+      try { body.tags = JSON.parse(body.tags); } catch (_) {}
+    }
 
     // Admin creates products without agencyId (global products)
     // Agency-specific inventory will be managed separately
@@ -303,6 +307,10 @@ const updateProductHandler = async (req, res, next) => {
     }
     if (typeof body.existingImages === 'string') {
       try { body.existingImages = JSON.parse(body.existingImages); } catch (_) {}
+    }
+    // Accept tags as JSON string from form-data during update
+    if (typeof body.tags === 'string') {
+      try { body.tags = JSON.parse(body.tags); } catch (_) {}
     }
 
     // If base64 images provided during update, upload them to Cloudinary

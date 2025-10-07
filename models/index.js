@@ -8,6 +8,7 @@ const AgencyInventory = require('./AgencyInventory');
 const AgencyOwner = require('./AgencyOwner');
 const TermsAndConditions = require('./TermsAndConditions');
 const PrivacyPolicy = require('./PrivacyPolicy');
+const Category = require('./Category');
 
 // Define associations
 Order.belongsTo(DeliveryAgent, { 
@@ -85,5 +86,6 @@ module.exports = {
   AgencyInventory,
   AgencyOwner,
   TermsAndConditions,
-  PrivacyPolicy
+  PrivacyPolicy,
+  Category
 };

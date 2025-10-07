@@ -9,45 +9,111 @@ const getSocketService = () => {
   return global.socketService;
 };
 
-// Create new Privacy Policy
+// Create new Privacy Policy (single or multiple)
 const createPrivacyPolicyHandler = async (req, res, next) => {
   try {
-    // Validate request body
-    const { error, value } = createPrivacyPolicy.validate(req.body);
-    if (error) {
-      return next(createError(400, error.details[0].message));
-    }
+    // Check if request body contains array (multiple policies) or single object
+    if (Array.isArray(req.body)) {
+      // Multiple privacy policies
+      const privacyPolicies = req.body;
 
-    // Check if title already exists
-    const existingPolicy = await PrivacyPolicy.findOne({ where: { title: value.title } });
-    if (existingPolicy) {
-      return next(createError(400, 'Privacy Policy with this title already exists'));
-    }
+      // Validate that privacyPolicies is a non-empty array
+      if (privacyPolicies.length === 0) {
+        return next(createError(400, 'privacyPolicies must be a non-empty array'));
+      }
 
-    // Add user ID who is creating/updating
-    value.lastUpdatedBy = req.user.id;
+      // Validate each privacy policy item
+      const validatedItems = [];
+      const errors = [];
 
-    // Create Privacy Policy
-    const privacyPolicy = await PrivacyPolicy.create(value);
+      for (let i = 0; i < privacyPolicies.length; i++) {
+        const item = privacyPolicies[i];
+        const { error, value } = createPrivacyPolicy.validate(item);
+        
+        if (error) {
+          errors.push({
+            index: i,
+            error: error.details[0].message
+          });
+        } else {
+          // Check if title already exists
+          const existingPolicy = await PrivacyPolicy.findOne({ where: { title: value.title } });
+          if (existingPolicy) {
+            errors.push({
+              index: i,
+              title: value.title,
+              error: 'Privacy Policy with this title already exists'
+            });
+          } else {
+            validatedItems.push({
+              ...value,
+              lastUpdatedBy: req.user.id
+            });
+          }
+        }
+      }
 
-    logger.info(`Privacy Policy created: ${privacyPolicy.title}`);
+      // If there are validation errors, return them
+      if (errors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation errors found',
+          errors: errors
+        });
+      }
 
-    // Emit socket notification for privacy policy creation
-    const socketService = getSocketService();
-    if (socketService) {
-      socketService.emitPrivacyPolicyCreated({
-        id: privacyPolicy.id,
-        title: privacyPolicy.title,
-        status: privacyPolicy.status,
-        createdBy: req.user.email || 'admin'
+      // Create all privacy policies
+      const createdPolicies = await PrivacyPolicy.bulkCreate(validatedItems);
+
+      logger.info(`Bulk created ${createdPolicies.length} Privacy Policies`);
+
+      res.status(201).json({
+        success: true,
+        message: `${createdPolicies.length} Privacy Policies created successfully`,
+        data: { 
+          privacyPolicies: createdPolicies,
+          count: createdPolicies.length
+        }
+      });
+
+    } else {
+      // Single privacy policy
+      const { error, value } = createPrivacyPolicy.validate(req.body);
+      if (error) {
+        return next(createError(400, error.details[0].message));
+      }
+
+      // Check if title already exists
+      const existingPolicy = await PrivacyPolicy.findOne({ where: { title: value.title } });
+      if (existingPolicy) {
+        return next(createError(400, 'Privacy Policy with this title already exists'));
+      }
+
+      // Add user ID who is creating/updating
+      value.lastUpdatedBy = req.user.id;
+
+      // Create Privacy Policy
+      const privacyPolicy = await PrivacyPolicy.create(value);
+
+      logger.info(`Privacy Policy created: ${privacyPolicy.title}`);
+
+      // Emit socket notification for privacy policy creation
+      const socketService = getSocketService();
+      if (socketService) {
+        socketService.emitPrivacyPolicyCreated({
+          id: privacyPolicy.id,
+          title: privacyPolicy.title,
+          status: privacyPolicy.status,
+          createdBy: req.user.email || 'admin'
+        });
+      }
+
+      res.status(201).json({
+        success: true,
+        message: 'Privacy Policy created successfully',
+        data: { privacyPolicy }
       });
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'Privacy Policy created successfully',
-      data: { privacyPolicy }
-    });
   } catch (error) {
     next(error);
   }

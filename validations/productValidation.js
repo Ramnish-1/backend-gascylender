@@ -65,8 +65,9 @@ const createProduct = Joi.object({
     'number.integer': 'Low stock threshold must be a whole number',
     'number.min': 'Low stock threshold cannot be negative'
   }),
-  category: Joi.string().valid('lpg', 'accessories').default('lpg').messages({
-    'any.only': 'Category must be either lpg or accessories'
+  category: Joi.string().min(2).max(100).default('lpg').messages({
+    'string.min': 'Category must be at least 2 characters long',
+    'string.max': 'Category cannot exceed 100 characters'
   }),
   status: Joi.string().valid('active', 'inactive').default('active').messages({
     'any.only': 'Status must be either active or inactive'
@@ -75,7 +76,12 @@ const createProduct = Joi.object({
     'array.base': 'Variants must be an array',
     'array.min': 'At least one variant is required'
   }),
-  images: Joi.array().items(Joi.string().min(1)).optional()
+  images: Joi.array().items(Joi.string().min(1)).optional(),
+  tags: Joi.array().items(Joi.string().min(1).max(50)).optional().messages({
+    'array.base': 'Tags must be an array',
+    'string.min': 'Each tag must be at least 1 character long',
+    'string.max': 'Each tag cannot exceed 50 characters'
+  })
   // Removed agencyId - products are now admin-managed
 });
 
@@ -103,8 +109,9 @@ const updateProduct = Joi.object({
     'number.integer': 'Low stock threshold must be a whole number',
     'number.min': 'Low stock threshold cannot be negative'
   }),
-  category: Joi.string().valid('lpg', 'accessories').optional().messages({
-    'any.only': 'Category must be either lpg or accessories'
+  category: Joi.string().min(2).max(100).optional().messages({
+    'string.min': 'Category must be at least 2 characters long',
+    'string.max': 'Category cannot exceed 100 characters'
   }),
   status: Joi.string().valid('active', 'inactive').optional().messages({
     'any.only': 'Status must be either active or inactive'
@@ -112,7 +119,12 @@ const updateProduct = Joi.object({
   variants: Joi.array().items(variantSchema).min(1).optional(),
   images: Joi.array().items(Joi.string().min(1)).optional(),
   imagesToDelete: Joi.array().items(Joi.string().min(1)).optional(),
-  existingImages: Joi.array().items(Joi.string().min(1)).optional()
+  existingImages: Joi.array().items(Joi.string().min(1)).optional(),
+  tags: Joi.array().items(Joi.string().min(1).max(50)).optional().messages({
+    'array.base': 'Tags must be an array',
+    'string.min': 'Each tag must be at least 1 character long',
+    'string.max': 'Each tag cannot exceed 50 characters'
+  })
   // Removed agencyId - products are now admin-managed
 }).unknown(true);
 

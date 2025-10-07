@@ -117,6 +117,9 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/admin/terms-and-conditions', require('./routes/termsAndConditions'));
 app.use('/api/admin/privacy-policies', require('./routes/privacyPolicy'));
 
+// Category routes
+app.use('/api/categories', require('./routes/category'));
+
 // Public routes for Terms & Conditions and Privacy Policy
 app.use('/api/public', require('./routes/public'));
 

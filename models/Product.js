@@ -45,9 +45,12 @@ const Product = sequelize.define('Product', {
     }
   },
   category: {
-    type: DataTypes.ENUM('lpg', 'accessories'),
+    type: DataTypes.STRING,
     allowNull: false,
-    defaultValue: 'lpg'
+    defaultValue: 'lpg',
+    validate: {
+      len: [2, 100]
+    }
   },
   status: {
     type: DataTypes.ENUM('active', 'inactive'),
@@ -62,6 +65,12 @@ const Product = sequelize.define('Product', {
   images: {
     // Array of image path strings (Cloudinary URLs). Use TEXT[] to avoid 255-char limit
     type: DataTypes.ARRAY(DataTypes.TEXT),
+    allowNull: true,
+    defaultValue: []
+  },
+  tags: {
+    // Array of tag strings like ["tag1", "tag2", "tag3"]
+    type: DataTypes.ARRAY(DataTypes.STRING),
     allowNull: true,
     defaultValue: []
   }
