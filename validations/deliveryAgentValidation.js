@@ -43,8 +43,9 @@ const createDeliveryAgent = Joi.object({
   joinedAt: Joi.date().optional().messages({
     'date.base': 'Joined date must be a valid date'
   }),
-  profileImage: Joi.string().min(1).optional().messages({
-    'string.min': 'Profile image must be a valid path'
+  // Allow clearing the image by sending empty string or null (with whitespace trimmed)
+  profileImage: Joi.string().trim().allow('', null).optional().messages({
+    'string.base': 'Profile image must be a string'
   }),
   agencyId: Joi.string().uuid().optional().messages({
     'string.guid': 'Agency ID must be a valid UUID'
@@ -86,8 +87,8 @@ const updateDeliveryAgent = Joi.object({
   joinedAt: Joi.date().optional().messages({
     'date.base': 'Joined date must be a valid date'
   }),
-  profileImage: Joi.string().min(1).optional().messages({
-    'string.min': 'Profile image must be a valid path'
+  profileImage: Joi.string().allow('', null).optional().messages({
+    'string.base': 'Profile image must be a string'
   }),
   agencyId: Joi.string().uuid().optional().messages({
     'string.guid': 'Agency ID must be a valid UUID'
