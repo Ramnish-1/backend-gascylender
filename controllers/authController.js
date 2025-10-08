@@ -10,7 +10,8 @@ const {
   validateVerifyOTP,
   validateDeleteAccount,
   validateForgotPasswordRequest,
-  validateResetPassword
+  validateResetPassword,
+  validateAgencyOwnerInitialPassword
 } = require('../validations/authValidation');
 const { updateAgentProfileComprehensive } = require('../validations/deliveryAgentValidation');
 const { createError } = require('../utils/errorHandler');
@@ -151,6 +152,17 @@ const login = async (req, res, next) => {
     if (userData.deliveryAgentId) additionalData.deliveryAgentId = userData.deliveryAgentId;
     if (userData.email) additionalData.email = userData.email;
     
+    // For agency_owner: if mustChangePassword is true, do not return token
+    if (userType === 'agency_owner') {
+      const agencyOwner = await AgencyOwner.findOne({ where: { email } });
+      if (agencyOwner && agencyOwner.mustChangePassword) {
+        return res.status(200).json({
+          success: true,
+          message: 'Login successful. Please set a new password to continue.'
+        });
+      }
+    }
+
     const token = generateToken(userData.id, userData.role || userType, additionalData);
 
     logger.info(`User logged in: ${email} (${userType})`);
@@ -1791,6 +1803,66 @@ const getCustomerDetails = async (req, res, next) => {
   }
 };
 
+// Set initial password for agency owner (no auth)
+const setAgencyOwnerInitialPassword = async (req, res, next) => {
+  try {
+    const { error, value } = validateAgencyOwnerInitialPassword.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    const { email, password } = value;
+
+    const agencyOwner = await AgencyOwner.findOne({ where: { email } });
+    if (!agencyOwner) {
+      return next(createError(404, 'Agency owner not found'));
+    }
+
+    // Allow setting initial password only if mustChangePassword is true
+    if (!agencyOwner.mustChangePassword) {
+      return next(createError(400, 'Password already set. Please login normally.'));
+    }
+
+    await agencyOwner.update({ password, mustChangePassword: false, isEmailVerified: true });
+
+    // After setting password, auto-login and return token like normal
+    const additionalData = { email: agencyOwner.email, agencyId: agencyOwner.agencyId };
+    const token = generateToken(agencyOwner.id, 'agency_owner', additionalData);
+
+    const userData = {
+      id: agencyOwner.id,
+      email: agencyOwner.email,
+      name: agencyOwner.name,
+      phone: agencyOwner.phone,
+      role: 'agency_owner',
+      agencyId: agencyOwner.agencyId,
+      isEmailVerified: agencyOwner.isEmailVerified,
+      lastLoginAt: agencyOwner.lastLoginAt,
+      profileImage: agencyOwner.profileImage,
+      address: agencyOwner.address,
+      city: agencyOwner.city,
+      pincode: agencyOwner.pincode,
+      state: agencyOwner.state,
+      createdAt: agencyOwner.createdAt,
+      updatedAt: agencyOwner.updatedAt
+    };
+
+    logger.info(`Agency owner initial password set: ${email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Password set successfully',
+      data: {
+        user: userData,
+        token,
+        userType: 'agency_owner'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   login,
   setupUser,
@@ -1809,5 +1881,6 @@ module.exports = {
   getCustomerDetails,
   setUserBlockStatus,
   forgotPasswordRequest,
-  resetPassword
+  resetPassword,
+  setAgencyOwnerInitialPassword
 };
