@@ -57,6 +57,45 @@ const Order = sequelize.define('Order', {
       min: 0
     }
   },
+  taxType: {
+    type: DataTypes.ENUM('none', 'percentage', 'fixed'),
+    defaultValue: 'none',
+    field: 'tax_type'
+  },
+  taxValue: {
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    field: 'tax_value'
+  },
+  taxAmount: {
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    validate: {
+      min: 0
+    },
+    field: 'tax_amount'
+  },
+  platformCharge: {
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    validate: {
+      min: 0
+    },
+    field: 'platform_charge'
+  },
+  couponCode: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    field: 'coupon_code'
+  },
+  couponDiscount: {
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    validate: {
+      min: 0
+    },
+    field: 'coupon_discount'
+  },
   totalAmount: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false,

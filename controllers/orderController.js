@@ -1,4 +1,4 @@
-const { Order, DeliveryAgent, Product } = require('../models');
+const { Order, DeliveryAgent, Product, Tax, PlatformCharge, Coupon } = require('../models');
 const { createOrder, updateOrderStatus, assignAgent, sendOTP, verifyOTP, cancelOrder, returnOrder, markPaymentReceived } = require('../validations/orderValidation');
 const { createError } = require('../utils/errorHandler');
 const { sendEmail } = require('../config/email');
@@ -29,14 +29,194 @@ const createOrderHandler = async (req, res, next) => {
       return next(createError(400, error.details[0].message));
     }
 
-    // Calculate totals
-    const totals = calculateOrderTotals(value.items);
+    // Get tax configuration first
+    const taxConfig = await Tax.findOne({ where: { isActive: true } });
+    const platformChargeConfig = await PlatformCharge.findOne({ where: { isActive: true } });
+    
+    let taxPercentage = 0;
+    let fixedTaxAmount = 0;
+    let taxType = 'none';
+    let taxValue = 0;
+    let platformChargeAmount = 0;
+    
+    if (taxConfig) {
+      if (taxConfig.percentage !== null && taxConfig.percentage > 0) {
+        taxPercentage = parseFloat(taxConfig.percentage);
+        taxType = 'percentage';
+        taxValue = taxPercentage;
+      } else if (taxConfig.fixedAmount !== null && taxConfig.fixedAmount > 0) {
+        fixedTaxAmount = parseFloat(taxConfig.fixedAmount);
+        taxType = 'fixed';
+        taxValue = fixedTaxAmount;
+      }
+    }
+    
+    // Get platform charge
+    if (platformChargeConfig && platformChargeConfig.amount > 0) {
+      platformChargeAmount = parseFloat(platformChargeConfig.amount);
+    }
+
+    // Verify each item's price from database and calculate correct amounts
+    const AgencyInventory = require('../models/AgencyInventory');
+    const agencyId = value.agencyId;
+    
+    let calculatedSubtotal = 0;
+    const validatedItems = [];
+
+    for (const item of value.items) {
+      // Fetch product from database
+      const product = await Product.findByPk(item.productId);
+      if (!product) {
+        return next(createError(404, `Product with ID ${item.productId} not found`));
+      }
+
+      // Get inventory for this product in the agency
+      const inventory = await AgencyInventory.findOne({
+        where: { 
+          productId: item.productId, 
+          agencyId: agencyId,
+          isActive: true 
+        }
+      });
+
+      if (!inventory) {
+        return next(createError(400, `Product ${product.productName} is not available in the selected agency`));
+      }
+
+      // Find the correct variant price
+      let actualPrice = null;
+      let variantFound = false;
+
+      if (item.variantLabel && inventory.agencyVariants && Array.isArray(inventory.agencyVariants)) {
+        const variant = inventory.agencyVariants.find(v => v.label === item.variantLabel);
+        if (variant) {
+          actualPrice = parseFloat(variant.price);
+          variantFound = true;
+        }
+      }
+
+      if (!variantFound) {
+        return next(createError(400, `Variant ${item.variantLabel} not found for product ${product.productName}`));
+      }
+
+      // Validate that customer sent correct price
+      const customerSentPrice = parseFloat(item.variantPrice);
+      if (Math.abs(customerSentPrice - actualPrice) > 0.01) {
+        return next(createError(400, `Invalid price for ${product.productName} (${item.variantLabel}). Expected: ₹${actualPrice}, Got: ₹${customerSentPrice}`));
+      }
+
+      // Calculate product amount (without tax)
+      const productAmount = actualPrice * item.quantity;
+      
+      // Calculate tax for this item
+      let itemTaxAmount = 0;
+      if (taxType === 'percentage') {
+        itemTaxAmount = (productAmount * taxPercentage) / 100;
+      } else if (taxType === 'fixed') {
+        // For fixed tax, distribute proportionally based on item contribution
+        // We'll calculate total contribution later
+        itemTaxAmount = 0; // Will be calculated after loop
+      }
+
+      // Calculate item total (product amount + tax)
+      const itemTotal = productAmount + itemTaxAmount;
+
+      calculatedSubtotal += productAmount;
+
+      // Create validated item with all details
+      validatedItems.push({
+        productId: item.productId,
+        productName: product.productName,
+        variantLabel: item.variantLabel,
+        variantPrice: actualPrice,
+        quantity: item.quantity,
+        productAmount: parseFloat(productAmount.toFixed(2)),
+        taxAmount: parseFloat(itemTaxAmount.toFixed(2)), // Will be updated for fixed tax
+        total: parseFloat(itemTotal.toFixed(2)) // Will be updated for fixed tax
+      });
+    }
+
+    // Calculate total tax amount
+    let totalTaxAmount = 0;
+    if (taxType === 'percentage') {
+      totalTaxAmount = (calculatedSubtotal * taxPercentage) / 100;
+      // Tax already calculated per item above
+    } else if (taxType === 'fixed') {
+      totalTaxAmount = fixedTaxAmount;
+      // Distribute fixed tax proportionally
+      validatedItems.forEach(item => {
+        const proportion = item.productAmount / calculatedSubtotal;
+        const itemTax = fixedTaxAmount * proportion;
+        item.taxAmount = parseFloat(itemTax.toFixed(2));
+        item.total = parseFloat((item.productAmount + item.taxAmount).toFixed(2));
+      });
+    }
+
+    // Apply coupon if provided (coupon applies on subtotal only)
+    let couponCode = null;
+    let couponDiscount = 0;
+    
+    if (value.couponCode && value.couponCode.trim() !== '') {
+      // Find and validate coupon
+      const coupon = await Coupon.findOne({
+        where: {
+          code: value.couponCode.toUpperCase(),
+          agencyId: agencyId,
+          isActive: true,
+        },
+      });
+
+      if (!coupon) {
+        return next(createError(400, 'Invalid or inactive coupon code'));
+      }
+
+      // Check expiry
+      const now = new Date();
+      const expiryDateTime = new Date(`${coupon.expiryDate} ${coupon.expiryTime}`);
+
+      if (now > expiryDateTime) {
+        // Auto-deactivate expired coupon
+        await coupon.update({ isActive: false });
+        return next(createError(400, 'Coupon has expired'));
+      }
+
+      // Check minimum and maximum amount against subtotal only
+      if (calculatedSubtotal < coupon.minAmount) {
+        return next(createError(400, `Minimum amount required for this coupon: ₹${coupon.minAmount}`));
+      }
+
+      if (coupon.maxAmount && calculatedSubtotal > coupon.maxAmount) {
+        return next(createError(400, `Maximum amount allowed for this coupon: ₹${coupon.maxAmount}`));
+      }
+
+      // Calculate discount on subtotal only
+      if (coupon.discountType === 'percentage') {
+        couponDiscount = (calculatedSubtotal * coupon.discountValue) / 100;
+      } else {
+        couponDiscount = parseFloat(coupon.discountValue);
+      }
+
+      couponCode = coupon.code;
+    }
+
+    // Distribute platform charge proportionally across items
+    validatedItems.forEach(item => {
+      item.taxValue = taxValue;
+      
+      // Calculate proportional platform charge for this item
+      const proportion = item.productAmount / calculatedSubtotal;
+      const itemPlatformCharge = platformChargeAmount * proportion;
+      item.platformCharge = parseFloat(itemPlatformCharge.toFixed(2));
+      
+      // Update item total to include platform charge
+      item.total = parseFloat((item.productAmount + item.taxAmount + item.platformCharge).toFixed(2));
+    });
+
+    // Calculate final total amount (subtotal + tax + platformCharge - couponDiscount)
+    const totalAmount = calculatedSubtotal + totalTaxAmount + platformChargeAmount - couponDiscount;
     
     // Generate order number
     const orderNumber = generateOrderNumber();
-
-    // Use the specified agency from the request
-    const agencyId = value.agencyId;
     
     // Verify the agency exists and is active
     const Agency = require('../models/Agency');
@@ -48,48 +228,33 @@ const createOrderHandler = async (req, res, next) => {
       return next(createError(400, `Agency ${agency.name} is not active`));
     }
       
-    // Verify all products are available in the specified agency
-    if (value.items && value.items.length > 0) {
-      const AgencyInventory = require('../models/AgencyInventory');
+    // Verify stock availability for validated items
+    for (const item of validatedItems) {
+      const inventory = await AgencyInventory.findOne({
+        where: { 
+          productId: item.productId, 
+          agencyId: agencyId,
+          isActive: true 
+        }
+      });
       
-      for (const item of value.items) {
-        const product = await Product.findByPk(item.productId);
-        if (!product) {
-          return next(createError(404, `Product with ID ${item.productId} not found`));
+      // Check stock availability for variant
+      let availableStock = 0;
+      let stockMessage = `variant ${item.variantLabel} of ${item.productName}`;
+      
+      if (inventory && inventory.agencyVariants && Array.isArray(inventory.agencyVariants)) {
+        const variant = inventory.agencyVariants.find(v => v.label === item.variantLabel);
+        if (variant) {
+          availableStock = variant.stock || 0;
         }
-        
-        const inventory = await AgencyInventory.findOne({
-          where: { 
-            productId: item.productId, 
-            agencyId: agencyId,
-            isActive: true 
-          }
-        });
-        
-        if (!inventory) {
-          return next(createError(400, `Product ${product.productName} is not available in the selected agency`));
-        }
-        
-        // Check stock availability - handle both product-level and variant-level stock
-        let availableStock = inventory.stock;
-        let stockMessage = `product ${product.productName}`;
-        
-        // If item has variant information, check variant-specific stock
-        if (item.variantLabel && inventory.agencyVariants && Array.isArray(inventory.agencyVariants)) {
-          const variant = inventory.agencyVariants.find(v => v.label === item.variantLabel);
-          if (variant) {
-            availableStock = variant.stock || 0;
-            stockMessage = `variant ${item.variantLabel} of ${product.productName}`;
-          }
-        }
-        
-        if (availableStock < item.quantity) {
-          return next(createError(400, `Insufficient stock for ${stockMessage}. Available: ${availableStock}, Requested: ${item.quantity}`));
-        }
+      }
+      
+      if (availableStock < item.quantity) {
+        return next(createError(400, `Insufficient stock for ${stockMessage}. Available: ${availableStock}, Requested: ${item.quantity}`));
       }
     }
 
-    // Create order
+    // Create order with validated items, tax details, platform charge, and coupon
     const order = await Order.create({
       orderNumber,
       customerName: value.customerName,
@@ -97,17 +262,22 @@ const createOrderHandler = async (req, res, next) => {
       customerPhone: value.customerPhone,
       customerAddress: value.customerAddress || null,
       deliveryMode: value.deliveryMode,
-      items: value.items,
-      subtotal: totals.subtotal,
-      totalAmount: totals.totalAmount,
+      items: validatedItems,
+      subtotal: parseFloat(calculatedSubtotal.toFixed(2)),
+      taxType: taxType,
+      taxValue: parseFloat(taxValue.toFixed(2)),
+      taxAmount: parseFloat(totalTaxAmount.toFixed(2)),
+      platformCharge: parseFloat(platformChargeAmount.toFixed(2)),
+      couponCode: couponCode,
+      couponDiscount: parseFloat(couponDiscount.toFixed(2)),
+      totalAmount: parseFloat(totalAmount.toFixed(2)),
       paymentMethod: value.paymentMethod,
       status: 'pending',
       agencyId: agencyId
     });
 
-    // Reduce stock in agency inventory
-    const AgencyInventory = require('../models/AgencyInventory');
-    for (const item of value.items) {
+    // Reduce stock in agency inventory using validated items
+    for (const item of validatedItems) {
       // Get current inventory to check if we need to update variants
       const inventory = await AgencyInventory.findOne({
         where: {
@@ -132,15 +302,6 @@ const createOrderHandler = async (req, res, next) => {
           await inventory.update({
             agencyVariants: updatedVariants
           });
-        } else {
-          // Update product-level stock
-          await AgencyInventory.decrement('stock', {
-            by: item.quantity,
-            where: {
-              productId: item.productId,
-              agencyId: agencyId
-            }
-          });
         }
       }
     }
@@ -155,6 +316,13 @@ const createOrderHandler = async (req, res, next) => {
         orderNumber: order.orderNumber,
         customerName: order.customerName,
         customerEmail: order.customerEmail,
+        subtotal: order.subtotal,
+        taxType: order.taxType,
+        taxValue: order.taxValue,
+        taxAmount: order.taxAmount,
+        platformCharge: order.platformCharge,
+        couponCode: order.couponCode,
+        couponDiscount: order.couponDiscount,
         totalAmount: order.totalAmount,
         agencyId: agencyId,
         status: order.status

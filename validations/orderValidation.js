@@ -1,6 +1,7 @@
 const Joi = require('joi');
 
 // Item schema for order items
+// Customer should only send basic product info - server will calculate tax and totals
 const orderItemSchema = Joi.object({
   productId: Joi.string().uuid().required().messages({
     'string.guid': 'Product ID must be a valid UUID',
@@ -26,11 +27,6 @@ const orderItemSchema = Joi.object({
     'number.integer': 'Quantity must be a whole number',
     'number.min': 'Quantity must be at least 1',
     'any.required': 'Quantity is required'
-  }),
-  total: Joi.number().positive().precision(2).required().messages({
-    'number.base': 'Total must be a valid number',
-    'number.positive': 'Total must be positive',
-    'any.required': 'Total is required'
   })
 });
 
@@ -75,6 +71,9 @@ const createOrder = Joi.object({
   paymentMethod: Joi.string().min(1).required().messages({
     'string.min': 'Payment method cannot be empty',
     'any.required': 'Payment method is required'
+  }),
+  couponCode: Joi.string().optional().allow('', null).messages({
+    'string.base': 'Coupon code must be a string'
   })
 });
 

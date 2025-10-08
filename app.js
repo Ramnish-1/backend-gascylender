@@ -120,6 +120,15 @@ app.use('/api/admin/privacy-policies', require('./routes/privacyPolicy'));
 // Category routes
 app.use('/api/categories', require('./routes/category'));
 
+// Tax routes
+app.use('/api/tax', require('./routes/tax'));
+
+// Platform charge routes
+app.use('/api/platform-charge', require('./routes/platformCharge'));
+
+// Coupon routes
+app.use('/api/coupons', require('./routes/coupon'));
+
 // Public routes for Terms & Conditions and Privacy Policy
 app.use('/api/public', require('./routes/public'));
 
