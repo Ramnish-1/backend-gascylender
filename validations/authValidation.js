@@ -142,6 +142,23 @@ const validateVerifyOTP = Joi.object({
   })
 });
 
+// Validation for agency owner initial password set
+const validateAgencyOwnerInitialPassword = Joi.object({
+  email: Joi.string().email().required().messages({
+    'string.email': 'Please provide a valid email address',
+    'any.required': 'Email is required'
+  }),
+  password: Joi.string().min(6).max(100).required().messages({
+    'string.min': 'Password must be at least 6 characters long',
+    'string.max': 'Password cannot exceed 100 characters',
+    'any.required': 'Password is required'
+  }),
+  confirmPassword: Joi.any().valid(Joi.ref('password')).required().messages({
+    'any.only': 'Passwords do not match',
+    'any.required': 'Confirm password is required'
+  })
+});
+
 // Validation for admin forgot password request
 const validateForgotPasswordRequest = Joi.object({
   email: Joi.string().email().required().messages({
@@ -189,5 +206,6 @@ module.exports = {
   validateVerifyOTP,
   validateDeleteAccount,
   validateForgotPasswordRequest,
-  validateResetPassword
+  validateResetPassword,
+  validateAgencyOwnerInitialPassword
 };

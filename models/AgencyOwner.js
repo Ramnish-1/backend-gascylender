@@ -53,6 +53,10 @@ const AgencyOwner = sequelize.define('AgencyOwner', {
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  mustChangePassword: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
+  },
   confirmationToken: {
     type: DataTypes.STRING,
     allowNull: true

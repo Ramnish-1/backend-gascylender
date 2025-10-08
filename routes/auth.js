@@ -11,6 +11,8 @@ router.post('/request-otp', authController.requestOTP); // Request OTP for custo
 router.post('/verify-otp', authController.verifyOTP); // Verify OTP for customer/agent
 router.post('/forgot-password', authController.forgotPasswordRequest); // Admin: send OTP to email
 router.post('/reset-password', authController.resetPassword); // Admin: reset using OTP
+// Agency owner: initial password set (no auth)
+router.post('/agency-owner/set-password', authController.setAgencyOwnerInitialPassword);
 
 // Protected routes
 router.post('/complete-profile/customer', authenticate, authController.completeCustomerProfile); // Complete customer profile

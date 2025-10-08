@@ -168,9 +168,7 @@ const create = async (req, res, next) => {
                                 <tr>
                                   <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Email</td>
                                   <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${agency.email}</td>
-                                  <td style="width: 20%; text-align: right;">
-                                    <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
-                                  </td>
+                                 
                                 </tr>
                               </table>
                             </td>
@@ -181,9 +179,6 @@ const create = async (req, res, next) => {
                                 <tr>
                                   <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Password</td>
                                   <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${randomPassword}</td>
-                                  <td style="width: 20%; text-align: right;">
-                                    <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
-                                  </td>
                                 </tr>
                               </table>
                             </td>
@@ -651,9 +646,6 @@ const update = async (req, res, next) => {
                                   <tr>
                                     <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Email</td>
                                     <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${value.email}</td>
-                                    <td style="width: 20%; text-align: right;">
-                                      <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
-                                    </td>
                                   </tr>
                                 </table>
                               </td>
@@ -664,9 +656,6 @@ const update = async (req, res, next) => {
                                   <tr>
                                     <td style="font-weight: bold; font-size: 14px; width: 20%; color:black;">Password</td>
                                     <td style="background-color: rgba(255, 255, 255, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.2); font-family: monospace; font-size: 13px; font-weight: bold; margin: 0 10px;color:black;">${newPassword}</td>
-                                    <td style="width: 20%; text-align: right;">
-                                      <span style="background-color: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: bold; cursor: pointer;color:black;">📋 Copy</span>
-                                    </td>
                                   </tr>
                                 </table>
                               </td>
