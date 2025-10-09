@@ -1,4 +1,4 @@
-const { Order, DeliveryAgent, Product, Tax, PlatformCharge, Coupon } = require('../models');
+const { Order, DeliveryAgent, Product, Tax, PlatformCharge, Coupon, DeliveryCharge, Agency, User } = require('../models');
 const { createOrder, updateOrderStatus, assignAgent, sendOTP, verifyOTP, cancelOrder, returnOrder, markPaymentReceived } = require('../validations/orderValidation');
 const { createError } = require('../utils/errorHandler');
 const { sendEmail } = require('../config/email');
@@ -199,6 +199,81 @@ const createOrderHandler = async (req, res, next) => {
       couponCode = coupon.code;
     }
 
+    // Calculate delivery charge for home_delivery mode
+    let deliveryChargeAmount = 0;
+    let deliveryDistance = null;
+    
+    if (value.deliveryMode === 'home_delivery') {
+      try {
+        // Get customer user to access addresses
+        const customer = await User.findOne({
+          where: { email: value.customerEmail }
+        });
+        
+        if (customer && customer.addresses && Array.isArray(customer.addresses) && customer.addresses.length > 0) {
+          // Use customer's first address or find matching address
+          const customerAddressObj = customer.addresses[0];
+          
+          // Get delivery charge configuration for agency
+          const deliveryChargeConfig = await DeliveryCharge.findOne({
+            where: { 
+              agencyId: agencyId,
+              status: 'active'
+            }
+          });
+          
+          if (deliveryChargeConfig) {
+            // Get agency details - already fetched below, so we'll move agency fetch here
+            const Agency = require('../models/Agency');
+            const agency = await Agency.findByPk(agencyId);
+            
+            if (agency) {
+              // Calculate distance using Google Maps API
+              const axios = require('axios');
+              const customerFullAddress = `${customerAddressObj.address}, ${customerAddressObj.city}, ${customerAddressObj.pincode}`;
+              const agencyFullAddress = `${agency.address}, ${agency.city}, ${agency.pincode}`;
+              
+              const apiKey = process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyBXNyT9zcGdvhAUCUEYTm6e_qPw26AOPgI';
+              
+              const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
+                params: {
+                  origins: agencyFullAddress,
+                  destinations: customerFullAddress,
+                  key: apiKey,
+                  mode: 'driving',
+                  units: 'metric'
+                }
+              });
+              
+              if (response.data.status === 'OK' && response.data.rows[0].elements[0].status === 'OK') {
+                const distanceInMeters = response.data.rows[0].elements[0].distance.value;
+                const distanceInKm = distanceInMeters / 1000;
+                deliveryDistance = parseFloat(distanceInKm.toFixed(2));
+                
+                const deliveryRadius = parseFloat(deliveryChargeConfig.deliveryRadius);
+                
+                // Check if within delivery radius
+                if (distanceInKm <= deliveryRadius) {
+                  // Calculate delivery charge based on type
+                  if (deliveryChargeConfig.chargeType === 'fixed') {
+                    deliveryChargeAmount = Math.floor(parseFloat(deliveryChargeConfig.fixedAmount));
+                  } else if (deliveryChargeConfig.chargeType === 'per_km') {
+                    const ratePerKm = parseFloat(deliveryChargeConfig.ratePerKm);
+                    deliveryChargeAmount = Math.floor(distanceInKm * ratePerKm);
+                  }
+                } else {
+                  return next(createError(400, `Delivery not available. Customer location is ${distanceInKm} km away, but delivery is only available within ${deliveryRadius} km radius.`));
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        logger.error('Error calculating delivery charge:', err);
+        // Continue without delivery charge if calculation fails
+      }
+    }
+
     // Distribute platform charge proportionally across items
     validatedItems.forEach(item => {
       item.taxValue = taxValue;
@@ -212,8 +287,8 @@ const createOrderHandler = async (req, res, next) => {
       item.total = parseFloat((item.productAmount + item.taxAmount + item.platformCharge).toFixed(2));
     });
 
-    // Calculate final total amount (subtotal + tax + platformCharge - couponDiscount)
-    const totalAmount = calculatedSubtotal + totalTaxAmount + platformChargeAmount - couponDiscount;
+    // Calculate final total amount (subtotal + tax + platformCharge + deliveryCharge - couponDiscount)
+    const totalAmount = calculatedSubtotal + totalTaxAmount + platformChargeAmount + deliveryChargeAmount - couponDiscount;
     
     // Generate order number
     const orderNumber = generateOrderNumber();
@@ -254,7 +329,7 @@ const createOrderHandler = async (req, res, next) => {
       }
     }
 
-    // Create order with validated items, tax details, platform charge, and coupon
+    // Create order with validated items, tax details, platform charge, delivery charge, and coupon
     const order = await Order.create({
       orderNumber,
       customerName: value.customerName,
@@ -268,6 +343,8 @@ const createOrderHandler = async (req, res, next) => {
       taxValue: parseFloat(taxValue.toFixed(2)),
       taxAmount: parseFloat(totalTaxAmount.toFixed(2)),
       platformCharge: parseFloat(platformChargeAmount.toFixed(2)),
+      deliveryCharge: parseFloat(deliveryChargeAmount.toFixed(2)),
+      deliveryDistance: deliveryDistance,
       couponCode: couponCode,
       couponDiscount: parseFloat(couponDiscount.toFixed(2)),
       totalAmount: parseFloat(totalAmount.toFixed(2)),

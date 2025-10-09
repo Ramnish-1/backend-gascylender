@@ -344,9 +344,9 @@ exports.applyCoupon = async (req, res, next) => {
     // Calculate discount
     let discountAmount = 0;
     if (coupon.discountType === 'percentage') {
-      discountAmount = (amount * coupon.discountValue) / 100;
+      discountAmount = (amount * parseFloat(coupon.discountValue)) / 100;
     } else {
-      discountAmount = coupon.discountValue;
+      discountAmount = parseFloat(coupon.discountValue);
     }
 
     // Final amount cannot be negative
@@ -359,7 +359,7 @@ exports.applyCoupon = async (req, res, next) => {
         couponCode: coupon.code,
         originalAmount: parseFloat(amount),
         discountType: coupon.discountType,
-        discountValue: coupon.discountValue,
+        discountValue: parseFloat(coupon.discountValue),
         discountAmount: parseFloat(discountAmount.toFixed(2)),
         finalAmount: parseFloat(finalAmount.toFixed(2)),
       },

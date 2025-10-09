@@ -83,6 +83,19 @@ const Order = sequelize.define('Order', {
     },
     field: 'platform_charge'
   },
+  deliveryCharge: {
+    type: DataTypes.DECIMAL(10, 2),
+    defaultValue: 0,
+    validate: {
+      min: 0
+    },
+    field: 'delivery_charge'
+  },
+  deliveryDistance: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+    field: 'delivery_distance'
+  },
   couponCode: {
     type: DataTypes.STRING,
     allowNull: true,

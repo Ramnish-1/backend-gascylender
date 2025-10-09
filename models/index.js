@@ -12,6 +12,7 @@ const Category = require('./Category');
 const Tax = require('./Tax');
 const PlatformCharge = require('./PlatformCharge');
 const Coupon = require('./Coupon');
+const DeliveryCharge = require('./DeliveryCharge');
 
 // Define associations
 Order.belongsTo(DeliveryAgent, { 
@@ -90,6 +91,17 @@ Agency.hasMany(Coupon, {
   as: 'Coupons'
 });
 
+// DeliveryCharge and Agency associations
+DeliveryCharge.belongsTo(Agency, {
+  foreignKey: 'agencyId',
+  as: 'Agency'
+});
+
+Agency.hasOne(DeliveryCharge, {
+  foreignKey: 'agencyId',
+  as: 'DeliveryCharge'
+});
+
 module.exports = {
   User,
   DeliveryAgent,
@@ -104,5 +116,6 @@ module.exports = {
   Category,
   Tax,
   PlatformCharge,
-  Coupon
+  Coupon,
+  DeliveryCharge
 };

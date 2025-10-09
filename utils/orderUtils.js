@@ -57,6 +57,8 @@ const formatOrderResponse = (order, includeAgent = false) => {
     taxValue: order.taxValue || 0,
     taxAmount: order.taxAmount || 0,
     platformCharge: order.platformCharge || 0,
+    deliveryCharge: order.deliveryCharge || 0,
+    deliveryDistance: order.deliveryDistance || null,
     couponCode: order.couponCode || null,
     couponDiscount: order.couponDiscount || 0,
     totalAmount: order.totalAmount,

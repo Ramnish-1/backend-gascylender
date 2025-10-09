@@ -129,6 +129,9 @@ app.use('/api/platform-charge', require('./routes/platformCharge'));
 // Coupon routes
 app.use('/api/coupons', require('./routes/coupon'));
 
+// Delivery charge routes
+app.use('/api/delivery-charges', require('./routes/deliveryCharge'));
+
 // Public routes for Terms & Conditions and Privacy Policy
 app.use('/api/public', require('./routes/public'));
 
