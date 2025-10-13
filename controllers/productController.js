@@ -877,6 +877,114 @@ const updateAgencyInventory = async (req, res, next) => {
   }
 };
 
+// Admin: Update ANY agency's stock (Admin-only - clearer function)
+const adminUpdateAgencyStock = async (req, res, next) => {
+  try {
+    const { productId, agencyId } = req.params;
+
+    // Admin-only check
+    if (!req.user || req.user.role !== 'admin') {
+      return next(createError(403, 'Only admin can perform this action'));
+    }
+
+    // Validate request body
+    const { error, value } = agencyInventorySchema.validate(req.body);
+    if (error) {
+      return next(createError(400, error.details[0].message));
+    }
+
+    // Check if product exists
+    const product = await Product.findByPk(productId);
+    if (!product) {
+      return next(createError(404, 'Product not found'));
+    }
+
+    // Check if agency exists
+    const agency = await Agency.findByPk(agencyId);
+    if (!agency) {
+      return next(createError(404, 'Agency not found'));
+    }
+
+    // Find inventory
+    let inventory = await AgencyInventory.findOne({
+      where: { productId: productId, agencyId: agencyId }
+    });
+
+    if (!inventory) {
+      return next(createError(404, 'Inventory not found. Please add this product to agency first.'));
+    }
+
+    // Update inventory
+    await inventory.update(value);
+
+    // Reload with associations
+    inventory = await AgencyInventory.findOne({
+      where: { productId: productId, agencyId: agencyId },
+      include: [
+        { model: Product, as: 'Product' },
+        { model: Agency, as: 'Agency' }
+      ]
+    });
+
+    logger.info(`Admin updated agency inventory: ${inventory.Product.productName} -> ${inventory.Agency.name}`);
+
+    // Emit socket notification
+    const socketService = global.socketService;
+    if (socketService) {
+      const inventoryData = {
+        productId: inventory.Product.id,
+        productName: inventory.Product.productName,
+        agencyId: inventory.Agency.id,
+        agencyName: inventory.Agency.name,
+        stock: inventory.stock,
+        lowStockThreshold: inventory.lowStockThreshold,
+        isActive: inventory.isActive,
+        agencyVariants: inventory.agencyVariants,
+        action: 'admin_updated'
+      };
+      
+      socketService.emitInventoryUpdated(inventoryData);
+
+      // Check for low stock alert
+      if (inventory.agencyVariants && inventory.agencyVariants.length > 0) {
+        // Check variants for low stock
+        inventory.agencyVariants.forEach(variant => {
+          if (variant.stock <= inventory.lowStockThreshold) {
+            socketService.emitLowStockAlert({
+              productId: inventory.Product.id,
+              productName: inventory.Product.productName,
+              variantLabel: variant.label,
+              agencyId: inventory.Agency.id,
+              agencyName: inventory.Agency.name,
+              stock: variant.stock,
+              lowStockThreshold: inventory.lowStockThreshold
+            });
+          }
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Agency stock updated successfully by admin`,
+      data: {
+        productId: inventory.Product.id,
+        productName: inventory.Product.productName,
+        agencyId: inventory.Agency.id,
+        agencyName: inventory.Agency.name,
+        stock: inventory.stock,
+        lowStockThreshold: inventory.lowStockThreshold,
+        agencyPrice: inventory.agencyPrice,
+        agencyVariants: inventory.agencyVariants,
+        isActive: inventory.isActive,
+        updatedAt: inventory.updatedAt
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Remove product from agency inventory
 const removeProductFromAgency = async (req, res, next) => {
   try {
@@ -1070,6 +1178,7 @@ module.exports = {
   getProductsByStatus,
   addProductToAgency,
   updateAgencyInventory,
+  adminUpdateAgencyStock,
   removeProductFromAgency,
   getAgencyInventory,
   getAllAgencyInventory

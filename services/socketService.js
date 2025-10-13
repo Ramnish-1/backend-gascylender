@@ -826,6 +826,288 @@ class SocketService {
     logger.info(`Privacy Policy updated notification sent: ${policyData.title}`);
   }
 
+  // Tax Management notifications
+  emitTaxUpdated(taxData) {
+    this.io.to(this.rooms.ADMIN).emit('tax:updated', {
+      type: 'TAX_UPDATED',
+      data: taxData,
+      timestamp: new Date()
+    });
+
+    // Notify all agencies about tax changes
+    this.io.to(this.rooms.AGENCIES).emit('tax:updated', {
+      type: 'TAX_UPDATED',
+      data: taxData,
+      timestamp: new Date()
+    });
+
+    // Notify all customers about tax changes
+    this.io.to(this.rooms.CUSTOMERS).emit('tax:updated', {
+      type: 'TAX_UPDATED',
+      data: taxData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Tax configuration updated notification sent`);
+  }
+
+  emitTaxDeleted(taxData) {
+    this.io.to(this.rooms.ADMIN).emit('tax:deleted', {
+      type: 'TAX_DELETED',
+      data: taxData,
+      timestamp: new Date()
+    });
+
+    // Notify all agencies about tax deletion
+    this.io.to(this.rooms.AGENCIES).emit('tax:deleted', {
+      type: 'TAX_DELETED',
+      data: taxData,
+      timestamp: new Date()
+    });
+
+    // Notify all customers about tax deletion
+    this.io.to(this.rooms.CUSTOMERS).emit('tax:deleted', {
+      type: 'TAX_DELETED',
+      data: taxData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Tax configuration deleted notification sent`);
+  }
+
+  // Platform Charge notifications
+  emitPlatformChargeUpdated(chargeData) {
+    this.io.to(this.rooms.ADMIN).emit('platform-charge:updated', {
+      type: 'PLATFORM_CHARGE_UPDATED',
+      data: chargeData,
+      timestamp: new Date()
+    });
+
+    // Notify all agencies
+    this.io.to(this.rooms.AGENCIES).emit('platform-charge:updated', {
+      type: 'PLATFORM_CHARGE_UPDATED',
+      data: chargeData,
+      timestamp: new Date()
+    });
+
+    // Notify all customers
+    this.io.to(this.rooms.CUSTOMERS).emit('platform-charge:updated', {
+      type: 'PLATFORM_CHARGE_UPDATED',
+      data: chargeData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Platform charge updated notification sent`);
+  }
+
+  emitPlatformChargeDeleted(chargeData) {
+    this.io.to(this.rooms.ADMIN).emit('platform-charge:deleted', {
+      type: 'PLATFORM_CHARGE_DELETED',
+      data: chargeData,
+      timestamp: new Date()
+    });
+
+    // Notify all agencies
+    this.io.to(this.rooms.AGENCIES).emit('platform-charge:deleted', {
+      type: 'PLATFORM_CHARGE_DELETED',
+      data: chargeData,
+      timestamp: new Date()
+    });
+
+    // Notify all customers
+    this.io.to(this.rooms.CUSTOMERS).emit('platform-charge:deleted', {
+      type: 'PLATFORM_CHARGE_DELETED',
+      data: chargeData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Platform charge deleted notification sent`);
+  }
+
+  // Delivery Charge notifications
+  emitDeliveryChargeCreated(deliveryChargeData) {
+    this.io.to(this.rooms.ADMIN).emit('delivery-charge:created', {
+      type: 'DELIVERY_CHARGE_CREATED',
+      data: deliveryChargeData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (deliveryChargeData.agencyId) {
+      this.io.to(`agency-${deliveryChargeData.agencyId}`).emit('delivery-charge:created', {
+        type: 'DELIVERY_CHARGE_CREATED',
+        data: deliveryChargeData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify all customers subscribed to this agency
+    this.io.to('agencies-updates').emit('delivery-charge:created', {
+      type: 'DELIVERY_CHARGE_CREATED',
+      data: deliveryChargeData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Delivery charge created notification sent for agency ${deliveryChargeData.agencyId}`);
+  }
+
+  emitDeliveryChargeUpdated(deliveryChargeData) {
+    this.io.to(this.rooms.ADMIN).emit('delivery-charge:updated', {
+      type: 'DELIVERY_CHARGE_UPDATED',
+      data: deliveryChargeData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (deliveryChargeData.agencyId) {
+      this.io.to(`agency-${deliveryChargeData.agencyId}`).emit('delivery-charge:updated', {
+        type: 'DELIVERY_CHARGE_UPDATED',
+        data: deliveryChargeData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify all customers
+    this.io.to('agencies-updates').emit('delivery-charge:updated', {
+      type: 'DELIVERY_CHARGE_UPDATED',
+      data: deliveryChargeData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Delivery charge updated notification sent for agency ${deliveryChargeData.agencyId}`);
+  }
+
+  emitDeliveryChargeDeleted(deliveryChargeData) {
+    this.io.to(this.rooms.ADMIN).emit('delivery-charge:deleted', {
+      type: 'DELIVERY_CHARGE_DELETED',
+      data: deliveryChargeData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (deliveryChargeData.agencyId) {
+      this.io.to(`agency-${deliveryChargeData.agencyId}`).emit('delivery-charge:deleted', {
+        type: 'DELIVERY_CHARGE_DELETED',
+        data: deliveryChargeData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify all customers
+    this.io.to('agencies-updates').emit('delivery-charge:deleted', {
+      type: 'DELIVERY_CHARGE_DELETED',
+      data: deliveryChargeData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Delivery charge deleted notification sent for agency ${deliveryChargeData.agencyId}`);
+  }
+
+  // Coupon notifications
+  emitCouponCreated(couponData) {
+    this.io.to(this.rooms.ADMIN).emit('coupon:created', {
+      type: 'COUPON_CREATED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (couponData.agencyId) {
+      this.io.to(`agency-${couponData.agencyId}`).emit('coupon:created', {
+        type: 'COUPON_CREATED',
+        data: couponData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify customers about new coupon availability
+    this.io.to('agencies-updates').emit('coupon:created', {
+      type: 'COUPON_CREATED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Coupon created notification sent: ${couponData.code}`);
+  }
+
+  emitCouponUpdated(couponData) {
+    this.io.to(this.rooms.ADMIN).emit('coupon:updated', {
+      type: 'COUPON_UPDATED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (couponData.agencyId) {
+      this.io.to(`agency-${couponData.agencyId}`).emit('coupon:updated', {
+        type: 'COUPON_UPDATED',
+        data: couponData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify customers
+    this.io.to('agencies-updates').emit('coupon:updated', {
+      type: 'COUPON_UPDATED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Coupon updated notification sent: ${couponData.code}`);
+  }
+
+  emitCouponStatusChanged(couponData) {
+    this.io.to(this.rooms.ADMIN).emit('coupon:status-changed', {
+      type: 'COUPON_STATUS_CHANGED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (couponData.agencyId) {
+      this.io.to(`agency-${couponData.agencyId}`).emit('coupon:status-changed', {
+        type: 'COUPON_STATUS_CHANGED',
+        data: couponData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify customers
+    this.io.to('agencies-updates').emit('coupon:status-changed', {
+      type: 'COUPON_STATUS_CHANGED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Coupon status changed notification sent: ${couponData.code} - Active: ${couponData.isActive}`);
+  }
+
+  emitCouponDeleted(couponData) {
+    this.io.to(this.rooms.ADMIN).emit('coupon:deleted', {
+      type: 'COUPON_DELETED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    // Notify specific agency
+    if (couponData.agencyId) {
+      this.io.to(`agency-${couponData.agencyId}`).emit('coupon:deleted', {
+        type: 'COUPON_DELETED',
+        data: couponData,
+        timestamp: new Date()
+      });
+    }
+
+    // Notify customers
+    this.io.to('agencies-updates').emit('coupon:deleted', {
+      type: 'COUPON_DELETED',
+      data: couponData,
+      timestamp: new Date()
+    });
+
+    logger.info(`Coupon deleted notification sent: ${couponData.code}`);
+  }
+
   // Send message to specific user by email
   sendToUserByEmail(email, eventName, data, userType = 'customer') {
     // Determine the room based on user type

@@ -41,10 +41,15 @@ router.get('/inventory/all', productController.getAllAgencyInventory);
 // Get agency inventory
 router.get('/inventory/agency/:agencyId', productController.getAgencyInventory);
 
+// Admin: Update ANY agency's stock (Admin-only - MUST come before generic route)
+// Supports both PUT and PATCH methods
+router.put('/:productId/inventory/agency/:agencyId/admin-update', productController.adminUpdateAgencyStock);
+router.patch('/:productId/inventory/agency/:agencyId/admin-update', productController.adminUpdateAgencyStock);
+
 // Add product to agency inventory
 router.post('/:productId/inventory/agency/:agencyId', productController.addProductToAgency);
 
-// Update agency inventory
+// Update agency inventory (Admin or Agency Owner)
 router.put('/:productId/inventory/agency/:agencyId', productController.updateAgencyInventory);
 
 // Remove product from agency inventory

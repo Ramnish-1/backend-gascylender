@@ -34,6 +34,17 @@ exports.addOrUpdateTax = async (req, res, next) => {
       });
     }
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitTaxUpdated({
+        id: tax.id,
+        percentage: tax.percentage || 0,
+        fixedAmount: tax.fixedAmount || 0,
+        isActive: tax.isActive,
+        action: 'updated'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Tax configuration saved successfully',
@@ -86,11 +97,26 @@ exports.deleteTax = async (req, res, next) => {
       throw new ErrorHandler('No active tax configuration found', 404);
     }
 
+    const taxData = {
+      id: tax.id,
+      percentage: tax.percentage || 0,
+      fixedAmount: tax.fixedAmount || 0,
+    };
+
     // Soft delete - set both to null
     tax.percentage = null;
     tax.fixedAmount = null;
     tax.isActive = false;
     await tax.save();
+
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitTaxDeleted({
+        ...taxData,
+        isActive: false,
+        action: 'deleted'
+      });
+    }
 
     res.status(200).json({
       success: true,

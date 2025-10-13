@@ -25,6 +25,16 @@ exports.addOrUpdatePlatformCharge = async (req, res, next) => {
       });
     }
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitPlatformChargeUpdated({
+        id: platformCharge.id,
+        amount: platformCharge.amount || 0,
+        isActive: platformCharge.isActive,
+        action: 'updated'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Platform charge saved successfully',
@@ -74,9 +84,23 @@ exports.deletePlatformCharge = async (req, res, next) => {
       throw new ErrorHandler('No active platform charge found', 404);
     }
 
+    const chargeData = {
+      id: platformCharge.id,
+      amount: platformCharge.amount || 0,
+    };
+
     // Soft delete
     platformCharge.isActive = false;
     await platformCharge.save();
+
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitPlatformChargeDeleted({
+        ...chargeData,
+        isActive: false,
+        action: 'deleted'
+      });
+    }
 
     res.status(200).json({
       success: true,

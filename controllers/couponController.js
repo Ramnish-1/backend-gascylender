@@ -53,6 +53,23 @@ exports.addCoupon = async (req, res, next) => {
       isActive: true,
     });
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitCouponCreated({
+        id: coupon.id,
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        minAmount: coupon.minAmount,
+        maxAmount: coupon.maxAmount,
+        expiryDate: coupon.expiryDate,
+        expiryTime: coupon.expiryTime,
+        agencyId: coupon.agencyId,
+        isActive: coupon.isActive,
+        action: 'created'
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: 'Coupon created successfully',
@@ -176,6 +193,23 @@ exports.updateCoupon = async (req, res, next) => {
 
     await coupon.save();
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitCouponUpdated({
+        id: coupon.id,
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        minAmount: coupon.minAmount,
+        maxAmount: coupon.maxAmount,
+        expiryDate: coupon.expiryDate,
+        expiryTime: coupon.expiryTime,
+        agencyId: coupon.agencyId,
+        isActive: coupon.isActive,
+        action: 'updated'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Coupon updated successfully',
@@ -205,6 +239,23 @@ exports.toggleCouponStatus = async (req, res, next) => {
     coupon.isActive = isActive;
     await coupon.save();
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitCouponStatusChanged({
+        id: coupon.id,
+        code: coupon.code,
+        discountType: coupon.discountType,
+        discountValue: coupon.discountValue,
+        minAmount: coupon.minAmount,
+        maxAmount: coupon.maxAmount,
+        expiryDate: coupon.expiryDate,
+        expiryTime: coupon.expiryTime,
+        agencyId: coupon.agencyId,
+        isActive: coupon.isActive,
+        action: 'status-changed'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: `Coupon ${isActive ? 'activated' : 'deactivated'} successfully`,
@@ -230,7 +281,23 @@ exports.deleteCoupon = async (req, res, next) => {
       return next(createError(403, 'You can only delete your own agency coupons'));
     }
 
+    const couponData = {
+      id: coupon.id,
+      code: coupon.code,
+      discountType: coupon.discountType,
+      discountValue: coupon.discountValue,
+      agencyId: coupon.agencyId,
+    };
+
     await coupon.destroy();
+
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitCouponDeleted({
+        ...couponData,
+        action: 'deleted'
+      });
+    }
 
     res.status(200).json({
       success: true,

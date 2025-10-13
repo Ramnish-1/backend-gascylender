@@ -49,6 +49,20 @@ const create = async (req, res, next) => {
 
     logger.info(`Delivery charge created for agency ${value.agencyId}`);
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitDeliveryChargeCreated({
+        id: deliveryCharge.id,
+        agencyId: deliveryCharge.agencyId,
+        chargeType: deliveryCharge.chargeType,
+        ratePerKm: deliveryCharge.ratePerKm,
+        fixedAmount: deliveryCharge.fixedAmount,
+        deliveryRadius: deliveryCharge.deliveryRadius,
+        status: deliveryCharge.status,
+        action: 'created'
+      });
+    }
+
     res.status(201).json({
       success: true,
       message: 'Delivery charge created successfully',
@@ -193,6 +207,20 @@ const update = async (req, res, next) => {
 
     logger.info(`Delivery charge ${id} updated`);
 
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitDeliveryChargeUpdated({
+        id: deliveryCharge.id,
+        agencyId: deliveryCharge.agencyId,
+        chargeType: deliveryCharge.chargeType,
+        ratePerKm: deliveryCharge.ratePerKm,
+        fixedAmount: deliveryCharge.fixedAmount,
+        deliveryRadius: deliveryCharge.deliveryRadius,
+        status: deliveryCharge.status,
+        action: 'updated'
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Delivery charge updated successfully',
@@ -215,9 +243,26 @@ const deleteCharge = async (req, res, next) => {
       return next(createError(404, 'Delivery charge not found'));
     }
 
+    const chargeData = {
+      id: deliveryCharge.id,
+      agencyId: deliveryCharge.agencyId,
+      chargeType: deliveryCharge.chargeType,
+      ratePerKm: deliveryCharge.ratePerKm,
+      fixedAmount: deliveryCharge.fixedAmount,
+      deliveryRadius: deliveryCharge.deliveryRadius,
+    };
+
     await deliveryCharge.destroy();
 
     logger.info(`Delivery charge ${id} deleted`);
+
+    // Emit socket event for real-time updates
+    if (global.socketService) {
+      global.socketService.emitDeliveryChargeDeleted({
+        ...chargeData,
+        action: 'deleted'
+      });
+    }
 
     res.status(200).json({
       success: true,
